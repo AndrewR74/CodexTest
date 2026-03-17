@@ -1,68 +1,62 @@
 class ExampleCustomEditor extends HTMLElement {
+  setConfiguration(configuration) {
+    this._config = configuration;
+    this.dispatchEvent(
+      new CustomEvent('configurationChanged', {
+        detail: configuration,
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
 
-    createColorPicker(title, colorCode, initialValue) {
-        const container = document.createElement('div');
-        container.style.display = 'flex';
-        container.style.alignItems = 'center';
-        container.style.justifyContent = 'flex-end';
-        container.style.marginBottom = '10px';
+  connectedCallback() {
+    this._config = this._config || {};
+    this.render();
+  }
 
-        const colorName = document.createElement('p');
-        colorName.textContent = title;
-        colorName.style.margin = '0px 10px 0px 0px';
+  render() {
+    this.innerHTML = '';
 
-        const colorPicker = document.createElement('input');
-        colorPicker.style.width = '32px';
-        colorPicker.style.height = '32px';
-        colorPicker.style.padding = '2px';
-        colorPicker.type = 'color';
-        colorPicker.value = initialValue;
+    const title = document.createElement('h2');
+    title.textContent = 'Session Tile Widget Settings';
 
-        colorPicker.onchange = () => {
-            const newConfig = {
-                ...this._config,
-                customColors: { ...this._config?.customColors }
-            };
-            newConfig.customColors[colorCode] = colorPicker.value;
-            this.setConfiguration(newConfig);
-        };
+    const maxSelection = this.createNumberField('Max selected sessions', 'maxSelections', this._config.maxSelections ?? 3, 1, 10);
+    const pageSize = this.createNumberField('Session page size', 'pageSize', this._config.pageSize ?? 200, 20, 500);
+    const hint = document.createElement('p');
+    hint.textContent = 'Categories are dynamically loaded from available sessions and can be multi-selected in the live widget.';
+    hint.style.fontSize = '12px';
 
-        const button = document.createElement('button');
-        button.textContent = 'Use Event Theme';
-        button.onclick = () => {
-            const newConfig = {
-                ...this._config,
-                customColors: { ...this._config?.customColors }
-            };
-            newConfig.customColors[colorCode] = undefined;
-            this.setConfiguration(newConfig);
-        };
+    this.append(title, maxSelection, pageSize, hint);
+  }
 
-        if (!this._config?.customColors || this._config?.customColors[colorCode] === undefined) {
-            button.style.border = '2px solid #016AE1';
-            button.style.borderRadius = '8px';
-        }
+  createNumberField(labelText, key, value, min, max) {
+    const wrapper = document.createElement('label');
+    wrapper.style.display = 'grid';
+    wrapper.style.gap = '6px';
+    wrapper.style.marginBottom = '12px';
 
-        button.style.margin = '0px 0px 0px 10px';
-        container.append(colorName, colorPicker, button);
-        return container;
-    }
+    const label = document.createElement('span');
+    label.textContent = labelText;
 
-    createThemeOverrides() {
-        const themeHeader = document.createElement('h2');
-        themeHeader.textContent = 'Theme';
-        themeHeader.style.fontFamily = 'Rubik';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = min;
+    input.max = max;
+    input.value = value;
 
-        this.themeOverrideContainer.replaceChildren(
-            themeHeader,
-            this.createColorPicker('Background Color', 'background', this._config?.customColors?.background ?? '#FFFFFF')
-        );
-    }
+    input.addEventListener('change', () => {
+      const parsed = Number(input.value);
+      const nextValue = Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : value;
+      this.setConfiguration({
+        ...this._config,
+        [key]: nextValue
+      });
+    });
 
-    connectedCallback() {
-        this.createFeesToggle();
-        this.createThemeOverrides();
-    }
+    wrapper.append(label, input);
+    return wrapper;
+  }
 }
 
 export default ExampleCustomEditor;
