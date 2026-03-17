@@ -1,399 +1,154 @@
 import { FeaturedSession } from './FeaturedSession.js';
 
-const DEFAULT_PAGE_SIZE = 200;
-const DEFAULT_MAX_SELECTIONS = 3;
-const DEFAULT_VISIBLE_TILE_BATCH = 60;
+const ObserveSubject = {
+  REGISTRATION_TYPE: 'REGISTRATION_TYPE',
+  ADMISSION_ITEM: 'ADMISSION_ITEM'
+};
 
-class SessionTabsWidget extends HTMLElement {
-  constructor(cventSdk, theme, configuration) {
+const debounce = (func, wait) => {
+  let timeout;
+  return (...args) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func.apply(this, args), wait);
+  };
+};
+
+export default class extends HTMLElement {
+  images = [
+    'https://d3auq6qtr2422x.cloudfront.net/images/bill-hamway-2pW3U_0rT1U-unsplash.jpeg',
+    'https://d3auq6qtr2422x.cloudfront.net/images/christian-holzinger-ROJi8Uo4MpA-unsplash.jpeg',
+    'https://d3auq6qtr2422x.cloudfront.net/images/chuttersnap-Q_KdjKxntH8-unsplash.jpeg'
+  ];
+
+  unsubCallbacks = [];
+
+  constructor({ configuration, theme }) {
     super();
-    this.cventSdk = cventSdk;
+    // store theme and configuration for later use
+    this.configuration = configuration;
     this.theme = theme;
-    this.configuration = configuration || {};
 
-    this.sessions = [];
-    this.filteredSessions = [];
-    this.selectedSessionIds = new Set();
-    this.selectedCategories = new Set();
-    this.activeDateKey = null;
-    this.searchQuery = '';
-    this.visibleTileCount = DEFAULT_VISIBLE_TILE_BATCH;
-
+    // Create a shadow root
     this.attachShadow({ mode: 'open' });
+
+    // attempting to define this custom element a second time (e.g. having two copies of this widget)
+    // will cause an error
+    if (!customElements.get('featured-session-registration')) {
+      // define a custom element that we will use to display each featured session
+      customElements.define('featured-session-registration', FeaturedSession);
+    }
+  }
+
+  // create a featured session card for each featured session using our accessory custom element and session detail information
+  createFeaturedSessionCards(featuredSessionIds, sessions, regTypes, featuredSessionContainer, feesBySessionId) {
+    featuredSessionIds.forEach(featuredSessionId => {
+      const featuredSession = sessions.find(session => session.id === featuredSessionId);
+      featuredSession.associatedRegistrationTypes = featuredSession.associatedRegistrationTypes.map(id => regTypes[id]);
+
+      if (featuredSession) {
+        featuredSessionContainer.appendChild(
+          new FeaturedSession(
+            featuredSession,
+            this.cventSdk,
+            this.theme,
+            this.configuration,
+            this.images.pop(),
+            feesBySessionId
+          )
+        );
+      }
+    });
   }
 
   async connectedCallback() {
-    this.renderScaffold();
-    await this.loadSessions();
-    this.applyFilters();
-  }
+    // container for the featured session cards
+    const featuredSessionContainer = document.createElement('div');
+    featuredSessionContainer.style.display = 'flex';
+    featuredSessionContainer.style.width = '100%';
 
-  get maxSelections() {
-    return Number(this.configuration?.maxSelections) || DEFAULT_MAX_SELECTIONS;
-  }
+    // placeholder so that our element doesn't render without height in the editor before we've added sessions
+    const placeholderDiv = document.createElement('div');
+    placeholderDiv.style.height = '200px';
+    placeholderDiv.style.width = '0px';
+    featuredSessionContainer.appendChild(placeholderDiv);
 
-  async loadSessions() {
-    const sessionGenerator = await this.cventSdk.getSessionGenerator(
-      'nameAsc',
-      Number(this.configuration?.pageSize) || DEFAULT_PAGE_SIZE,
-      { byRegistrationTypeAndAdmissionItem: true }
+    // get our array of featured session ids
+    const featuredSessionIds = this.configuration?.featuredSessionIds ?? [];
+
+    // create our session generator
+    const sessionGenerator = await this.getSessionGenerator('dateTimeDesc', 20);
+    const sessions = [];
+
+    // iterate over the generator until we have retrieved SessionDetail objects for all of our featured sessions
+    for await (const page of sessionGenerator) {
+      // for each session in our current page
+      page.sessions.forEach(session => {
+        // if that session is one of our featured sessions...
+        if (featuredSessionIds.find(featuredSessionId => session.id === featuredSessionId)) {
+          sessions.push(session);
+        }
+      });
+
+      // if we have found all of our sessions, stop fetching pages
+      if (featuredSessionIds.length === sessions.length) {
+        break;
+      }
+    }
+
+    const feesBySessionId = {};
+    if (this.configuration?.showFees && this.cventSdk.getApplicableProductFeesGenerator) {
+      // only query fees related to the featured sessions
+      const filter = `productId in (${featuredSessionIds.map(id => `'${id}'`).join(',')})`;
+      const feesGenerator = await this.cventSdk.getApplicableProductFeesGenerator({ filter });
+      for await (const page of feesGenerator) {
+        for (const fee of page.records) {
+          feesBySessionId[fee.productId] = fee;
+        }
+      }
+    }
+
+    const associatedRegistrationTypes = sessions.reduce(
+      (regTypeIds, session) => [...regTypeIds, ...(session?.associatedRegistrationTypes || [])],
+      []
     );
+    const regTypes = await this.cventSdk.getRegistrationTypes(associatedRegistrationTypes);
 
-    if (sessionGenerator?.[Symbol.asyncIterator]) {
-      for await (const session of sessionGenerator) {
-        this.sessions.push(session);
-      }
-      return;
-    }
+    this.createFeaturedSessionCards(featuredSessionIds, sessions, regTypes, featuredSessionContainer, feesBySessionId);
 
-    if (typeof sessionGenerator?.next === 'function') {
-      let result = await sessionGenerator.next();
-      while (!result.done) {
-        if (Array.isArray(result.value)) {
-          this.sessions.push(...result.value);
-        } else if (result.value) {
-          this.sessions.push(result.value);
-        }
-        result = await sessionGenerator.next();
-      }
-      return;
-    }
+    /**
+     * Clears the featured session container and creates new session cards.
+     *
+     * Uses debounce to avoid multiple callback triggers for observed subjects.
+     * For example, observing both REGISTRATION_TYPE and ADMISSION_ITEM subject updates
+     * could cause a registration type update to trigger an admission item update internally,
+     * resulting in multiple calls to the observe callback functions.
+     */
+    const clearAndCreateSessionCards = debounce(() => {
+      featuredSessionContainer.replaceChildren();
+      this.createFeaturedSessionCards(
+        featuredSessionIds,
+        sessions,
+        regTypes,
+        featuredSessionContainer,
+        feesBySessionId
+      );
+    }, 300);
 
-    if (typeof sessionGenerator?.getNext === 'function') {
-      let nextBatch = await sessionGenerator.getNext();
-      while (nextBatch?.length) {
-        this.sessions.push(...nextBatch);
-        nextBatch = await sessionGenerator.getNext();
-      }
-    }
+    // observes changes to admission item and re-create session cards
+    const admitItemObserve = this.cventSdk.observe(ObserveSubject.ADMISSION_ITEM, clearAndCreateSessionCards);
+    // Store the ADMISSION_ITEM unobserve callback to unsubscribe later
+    this.unsubCallbacks.push(admitItemObserve.unobserve);
+
+    // observes changes to registration type and re-create session cards
+    const regTypeObserve = this.cventSdk.observe(ObserveSubject.REGISTRATION_TYPE, clearAndCreateSessionCards);
+    // Store the REGISTRATION_TYPE unobserve callback to unsubscribe later
+    this.unsubCallbacks.push(regTypeObserve.unobserve);
+
+    this.shadowRoot.appendChild(featuredSessionContainer);
   }
 
-  renderScaffold() {
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          width: 100%;
-          color: #111827;
-          font-family: Arial, sans-serif;
-        }
-
-        .container {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-
-        .filters {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-          gap: 12px;
-          align-items: end;
-        }
-
-        .field {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-
-        .field label {
-          font-size: 0.875rem;
-          font-weight: 600;
-        }
-
-        .search-input,
-        .category-button {
-          border: 1px solid #d1d5db;
-          border-radius: 10px;
-          min-height: 42px;
-          padding: 10px 12px;
-          box-sizing: border-box;
-          background: #fff;
-          width: 100%;
-          font-size: 0.95rem;
-        }
-
-        .category-filter {
-          position: relative;
-        }
-
-        .category-button {
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .category-menu {
-          position: absolute;
-          top: calc(100% + 6px);
-          left: 0;
-          width: 100%;
-          max-height: 280px;
-          overflow: auto;
-          background: #fff;
-          border: 1px solid #d1d5db;
-          border-radius: 12px;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
-          padding: 8px;
-          z-index: 20;
-          display: none;
-        }
-
-        .category-filter.open .category-menu {
-          display: block;
-        }
-
-        .category-option {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 8px;
-          border-radius: 8px;
-          cursor: pointer;
-        }
-
-        .category-option:hover {
-          background: #f3f4f6;
-        }
-
-        .tabs {
-          display: flex;
-          gap: 8px;
-          overflow-x: auto;
-          padding-bottom: 4px;
-        }
-
-        .tab {
-          border: 1px solid #d1d5db;
-          background: #fff;
-          border-radius: 999px;
-          padding: 10px 14px;
-          cursor: pointer;
-          white-space: nowrap;
-          font-weight: 600;
-        }
-
-        .tab.active {
-          background: ${this.configuration?.customColors?.background || this.theme?.palette?.secondary || '#eef4ff'};
-          border-color: ${this.theme?.palette?.primary || '#016AE1'};
-        }
-
-        .status-row {
-          font-size: 0.875rem;
-          color: #374151;
-          display: flex;
-          justify-content: space-between;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .tiles {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-          gap: 12px;
-        }
-
-        .empty {
-          padding: 20px;
-          border: 1px dashed #d1d5db;
-          border-radius: 10px;
-          color: #6b7280;
-        }
-
-        .load-more {
-          border: 1px solid #d1d5db;
-          border-radius: 10px;
-          background: #fff;
-          min-height: 42px;
-          cursor: pointer;
-          font-weight: 600;
-        }
-
-        @media (max-width: 640px) {
-          .tiles {
-            grid-template-columns: 1fr;
-          }
-        }
-      </style>
-      <div class="container">
-        <div class="filters">
-          <div class="field">
-            <label>Search sessions</label>
-            <input class="search-input" type="search" placeholder="Search by title, location, speaker" />
-          </div>
-          <div class="field category-filter">
-            <label>Filter categories</label>
-            <button class="category-button" type="button">All categories</button>
-            <div class="category-menu"></div>
-          </div>
-        </div>
-        <div class="tabs"></div>
-        <div class="status-row">
-          <span class="results-summary">Loading sessions...</span>
-          <span class="selection-summary">Selected 0/${this.maxSelections}</span>
-        </div>
-        <div class="tiles"></div>
-        <button class="load-more" type="button" hidden>Load more sessions</button>
-      </div>
-    `;
-
-    this.shadowRoot.querySelector('.search-input').addEventListener('input', event => {
-      this.searchQuery = event.target.value.trim().toLowerCase();
-      this.visibleTileCount = DEFAULT_VISIBLE_TILE_BATCH;
-      this.applyFilters();
-    });
-
-    this.shadowRoot.querySelector('.category-button').addEventListener('click', () => {
-      this.shadowRoot.querySelector('.category-filter').classList.toggle('open');
-    });
-
-    this.shadowRoot.querySelector('.load-more').addEventListener('click', () => {
-      this.visibleTileCount += DEFAULT_VISIBLE_TILE_BATCH;
-      this.renderTiles();
-    });
-
-    this.shadowRoot.addEventListener('click', event => {
-      if (!event.composedPath().some(node => node?.classList?.contains?.('category-filter'))) {
-        this.shadowRoot.querySelector('.category-filter').classList.remove('open');
-      }
-    });
-  }
-
-  applyFilters() {
-    this.filteredSessions = this.sessions.filter(session => {
-      const categoryName = session.category?.name || 'Uncategorized';
-      const matchesCategory = !this.selectedCategories.size || this.selectedCategories.has(categoryName);
-      const haystack = [session.name, session.location?.name || '', categoryName, ...(session.speakers || []).map(s => s.name)]
-        .join(' ')
-        .toLowerCase();
-      const matchesSearch = !this.searchQuery || haystack.includes(this.searchQuery);
-      return matchesCategory && matchesSearch;
-    });
-
-    const grouped = this.groupByDate(this.filteredSessions);
-    const firstDateKey = Object.keys(grouped)[0] || null;
-    if (!this.activeDateKey || !grouped[this.activeDateKey]) {
-      this.activeDateKey = firstDateKey;
-    }
-
-    this.renderCategoryMenu();
-    this.renderTabs(grouped);
-    this.renderTiles();
-    this.updateSummary();
-  }
-
-  groupByDate(sessionList) {
-    return sessionList.reduce((acc, session) => {
-      const dateKey = this.getDateKey(session.startDateTime);
-      if (!acc[dateKey]) {
-        acc[dateKey] = [];
-      }
-      acc[dateKey].push(session);
-      return acc;
-    }, {});
-  }
-
-  getDateKey(dateValue) {
-    const date = new Date(dateValue);
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-  }
-
-  renderCategoryMenu() {
-    const menu = this.shadowRoot.querySelector('.category-menu');
-    const categories = [...new Set(this.sessions.map(session => session.category?.name || 'Uncategorized'))].sort();
-
-    menu.innerHTML = '';
-    categories.forEach(category => {
-      const option = document.createElement('label');
-      option.className = 'category-option';
-      option.innerHTML = `<input type="checkbox" ${this.selectedCategories.has(category) ? 'checked' : ''} /> <span>${category}</span>`;
-      option.querySelector('input').addEventListener('change', event => {
-        if (event.target.checked) {
-          this.selectedCategories.add(category);
-        } else {
-          this.selectedCategories.delete(category);
-        }
-        this.visibleTileCount = DEFAULT_VISIBLE_TILE_BATCH;
-        this.applyFilters();
-      });
-      menu.append(option);
-    });
-
-    const label = this.shadowRoot.querySelector('.category-button');
-    label.textContent = this.selectedCategories.size ? `${this.selectedCategories.size} categories selected` : 'All categories';
-  }
-
-  renderTabs(groupedSessions) {
-    const tabs = this.shadowRoot.querySelector('.tabs');
-    tabs.innerHTML = '';
-
-    Object.entries(groupedSessions).forEach(([dateKey, sessions]) => {
-      const tab = document.createElement('button');
-      tab.type = 'button';
-      tab.className = `tab ${this.activeDateKey === dateKey ? 'active' : ''}`;
-      tab.textContent = `${dateKey} (${sessions.length})`;
-      tab.addEventListener('click', () => {
-        this.activeDateKey = dateKey;
-        this.visibleTileCount = DEFAULT_VISIBLE_TILE_BATCH;
-        this.renderTabs(groupedSessions);
-        this.renderTiles();
-      });
-      tabs.append(tab);
-    });
-  }
-
-  renderTiles() {
-    const tileContainer = this.shadowRoot.querySelector('.tiles');
-    const grouped = this.groupByDate(this.filteredSessions);
-    const activeSessions = grouped[this.activeDateKey] || [];
-    const visibleSessions = activeSessions.slice(0, this.visibleTileCount);
-
-    tileContainer.innerHTML = '';
-
-    if (!visibleSessions.length) {
-      tileContainer.innerHTML = '<div class="empty">No sessions found for this filter combination.</div>';
-    } else {
-      visibleSessions.forEach(session => {
-        const tile = new FeaturedSession(session, this.theme, {
-          isSelected: this.selectedSessionIds.has(session.id),
-          onToggle: () => this.toggleSelection(session.id)
-        });
-        tileContainer.append(tile);
-      });
-    }
-
-    const loadMore = this.shadowRoot.querySelector('.load-more');
-    loadMore.hidden = activeSessions.length <= visibleSessions.length;
-    loadMore.textContent = `Load more sessions (${activeSessions.length - visibleSessions.length} remaining)`;
-
-    this.updateSummary();
-  }
-
-  toggleSelection(sessionId) {
-    if (this.selectedSessionIds.has(sessionId)) {
-      this.selectedSessionIds.delete(sessionId);
-      this.renderTiles();
-      return;
-    }
-
-    if (this.selectedSessionIds.size >= this.maxSelections) {
-      return;
-    }
-
-    this.selectedSessionIds.add(sessionId);
-    this.renderTiles();
-  }
-
-  updateSummary() {
-    const grouped = this.groupByDate(this.filteredSessions);
-    const activeCount = (grouped[this.activeDateKey] || []).length;
-    const totalCount = this.filteredSessions.length;
-
-    this.shadowRoot.querySelector('.results-summary').textContent =
-      `${totalCount} sessions found • ${activeCount} in current date tab`;
-    this.shadowRoot.querySelector('.selection-summary').textContent =
-      `Selected ${this.selectedSessionIds.size}/${this.maxSelections}`;
+  disconnectedCallback() {
+    this.unsubCallbacks.forEach(unsub => unsub());
+    this.unsubCallbacks = [];
   }
 }
-
-export default SessionTabsWidget;
