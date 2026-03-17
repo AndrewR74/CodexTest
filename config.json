@@ -1,0 +1,6 @@
+{
+  "product": "Event",
+  "purpose": "SessionRegistration",
+  "essential": true,
+  "customElementName": "featured-sessions"
+}
