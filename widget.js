@@ -1,154 +1,268 @@
-import { FeaturedSession } from './FeaturedSession.js';
+import { SessionTile } from './SessionTile.js';
 
 const ObserveSubject = {
   REGISTRATION_TYPE: 'REGISTRATION_TYPE',
   ADMISSION_ITEM: 'ADMISSION_ITEM'
 };
 
-const debounce = (func, wait) => {
-  let timeout;
-  return (...args) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func.apply(this, args), wait);
-  };
-};
+const dateKey = value => new Date(value).toISOString().slice(0, 10);
+
+const prettyDate = value =>
+  new Date(value).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric'
+  });
 
 export default class extends HTMLElement {
-  images = [
-    'https://d3auq6qtr2422x.cloudfront.net/images/bill-hamway-2pW3U_0rT1U-unsplash.jpeg',
-    'https://d3auq6qtr2422x.cloudfront.net/images/christian-holzinger-ROJi8Uo4MpA-unsplash.jpeg',
-    'https://d3auq6qtr2422x.cloudfront.net/images/chuttersnap-Q_KdjKxntH8-unsplash.jpeg'
-  ];
-
   unsubCallbacks = [];
+  selectedCategoryIds = new Set();
+  selectedDate = '';
 
   constructor({ configuration, theme }) {
     super();
-    // store theme and configuration for later use
     this.configuration = configuration;
     this.theme = theme;
-
-    // Create a shadow root
     this.attachShadow({ mode: 'open' });
 
-    // attempting to define this custom element a second time (e.g. having two copies of this widget)
-    // will cause an error
-    if (!customElements.get('featured-session-registration')) {
-      // define a custom element that we will use to display each featured session
-      customElements.define('featured-session-registration', FeaturedSession);
+    if (!customElements.get('session-browser-tile')) {
+      customElements.define('session-browser-tile', SessionTile);
     }
-  }
-
-  // create a featured session card for each featured session using our accessory custom element and session detail information
-  createFeaturedSessionCards(featuredSessionIds, sessions, regTypes, featuredSessionContainer, feesBySessionId) {
-    featuredSessionIds.forEach(featuredSessionId => {
-      const featuredSession = sessions.find(session => session.id === featuredSessionId);
-      featuredSession.associatedRegistrationTypes = featuredSession.associatedRegistrationTypes.map(id => regTypes[id]);
-
-      if (featuredSession) {
-        featuredSessionContainer.appendChild(
-          new FeaturedSession(
-            featuredSession,
-            this.cventSdk,
-            this.theme,
-            this.configuration,
-            this.images.pop(),
-            feesBySessionId
-          )
-        );
-      }
-    });
   }
 
   async connectedCallback() {
-    // container for the featured session cards
-    const featuredSessionContainer = document.createElement('div');
-    featuredSessionContainer.style.display = 'flex';
-    featuredSessionContainer.style.width = '100%';
+    this.root = document.createElement('section');
+    this.root.className = 'widget-root';
+    this.shadowRoot.append(this.createStyles(), this.root);
 
-    // placeholder so that our element doesn't render without height in the editor before we've added sessions
-    const placeholderDiv = document.createElement('div');
-    placeholderDiv.style.height = '200px';
-    placeholderDiv.style.width = '0px';
-    featuredSessionContainer.appendChild(placeholderDiv);
+    await this.fetchAndRender();
 
-    // get our array of featured session ids
-    const featuredSessionIds = this.configuration?.featuredSessionIds ?? [];
+    const rerender = async () => {
+      await this.fetchAndRender();
+    };
 
-    // create our session generator
-    const sessionGenerator = await this.getSessionGenerator('dateTimeDesc', 20);
-    const sessions = [];
-
-    // iterate over the generator until we have retrieved SessionDetail objects for all of our featured sessions
-    for await (const page of sessionGenerator) {
-      // for each session in our current page
-      page.sessions.forEach(session => {
-        // if that session is one of our featured sessions...
-        if (featuredSessionIds.find(featuredSessionId => session.id === featuredSessionId)) {
-          sessions.push(session);
-        }
-      });
-
-      // if we have found all of our sessions, stop fetching pages
-      if (featuredSessionIds.length === sessions.length) {
-        break;
-      }
-    }
-
-    const feesBySessionId = {};
-    if (this.configuration?.showFees && this.cventSdk.getApplicableProductFeesGenerator) {
-      // only query fees related to the featured sessions
-      const filter = `productId in (${featuredSessionIds.map(id => `'${id}'`).join(',')})`;
-      const feesGenerator = await this.cventSdk.getApplicableProductFeesGenerator({ filter });
-      for await (const page of feesGenerator) {
-        for (const fee of page.records) {
-          feesBySessionId[fee.productId] = fee;
-        }
-      }
-    }
-
-    const associatedRegistrationTypes = sessions.reduce(
-      (regTypeIds, session) => [...regTypeIds, ...(session?.associatedRegistrationTypes || [])],
-      []
-    );
-    const regTypes = await this.cventSdk.getRegistrationTypes(associatedRegistrationTypes);
-
-    this.createFeaturedSessionCards(featuredSessionIds, sessions, regTypes, featuredSessionContainer, feesBySessionId);
-
-    /**
-     * Clears the featured session container and creates new session cards.
-     *
-     * Uses debounce to avoid multiple callback triggers for observed subjects.
-     * For example, observing both REGISTRATION_TYPE and ADMISSION_ITEM subject updates
-     * could cause a registration type update to trigger an admission item update internally,
-     * resulting in multiple calls to the observe callback functions.
-     */
-    const clearAndCreateSessionCards = debounce(() => {
-      featuredSessionContainer.replaceChildren();
-      this.createFeaturedSessionCards(
-        featuredSessionIds,
-        sessions,
-        regTypes,
-        featuredSessionContainer,
-        feesBySessionId
-      );
-    }, 300);
-
-    // observes changes to admission item and re-create session cards
-    const admitItemObserve = this.cventSdk.observe(ObserveSubject.ADMISSION_ITEM, clearAndCreateSessionCards);
-    // Store the ADMISSION_ITEM unobserve callback to unsubscribe later
-    this.unsubCallbacks.push(admitItemObserve.unobserve);
-
-    // observes changes to registration type and re-create session cards
-    const regTypeObserve = this.cventSdk.observe(ObserveSubject.REGISTRATION_TYPE, clearAndCreateSessionCards);
-    // Store the REGISTRATION_TYPE unobserve callback to unsubscribe later
-    this.unsubCallbacks.push(regTypeObserve.unobserve);
-
-    this.shadowRoot.appendChild(featuredSessionContainer);
+    const admitItemObserve = this.cventSdk.observe(ObserveSubject.ADMISSION_ITEM, rerender);
+    const regTypeObserve = this.cventSdk.observe(ObserveSubject.REGISTRATION_TYPE, rerender);
+    this.unsubCallbacks.push(admitItemObserve.unobserve, regTypeObserve.unobserve);
   }
 
   disconnectedCallback() {
-    this.unsubCallbacks.forEach(unsub => unsub());
-    this.unsubCallbacks = [];
+    this.unsubCallbacks.forEach(unsub => unsub?.());
+  }
+
+  async fetchAndRender() {
+    const generator = await this.cventSdk.getSessionGenerator('nameAsc', this.configuration?.pageSize ?? 50, {
+      byRegistrationTypeAndAdmissionItem: true
+    });
+
+    const sessions = [];
+    for await (const page of generator) {
+      sessions.push(...page.sessions);
+    }
+
+    this.sessions = sessions;
+    this.render();
+  }
+
+  render() {
+    const grouped = this.groupSessionsByDate(this.sessions || []);
+    const categories = this.getUniqueCategories(this.sessions || []);
+    const availableDates = Object.keys(grouped).sort((a, b) => new Date(a) - new Date(b));
+
+    if (!this.selectedDate || !grouped[this.selectedDate]) {
+      this.selectedDate = availableDates[0] || '';
+    }
+
+    this.root.replaceChildren(
+      this.createHeader(),
+      this.createToolbar(categories),
+      this.createDateTabs(availableDates),
+      this.createTilesContainer(grouped[this.selectedDate] || []),
+      this.createRecommendations()
+    );
+  }
+
+  createHeader() {
+    const header = document.createElement('div');
+    header.className = 'header';
+    header.innerHTML = `<h2>Browse Sessions</h2><p>Select a date tab and refine results by category.</p>`;
+    return header;
+  }
+
+  createToolbar(categories) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+
+    const categoryWrap = document.createElement('details');
+    categoryWrap.className = 'category-filter';
+
+    const summary = document.createElement('summary');
+    summary.textContent = this.selectedCategoryIds.size
+      ? `Categories (${this.selectedCategoryIds.size} selected)`
+      : 'Filter categories';
+
+    const options = document.createElement('div');
+    options.className = 'category-options';
+
+    categories.forEach(cat => {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = this.selectedCategoryIds.has(cat.id);
+      checkbox.onchange = () => {
+        if (checkbox.checked) {
+          this.selectedCategoryIds.add(cat.id);
+        } else {
+          this.selectedCategoryIds.delete(cat.id);
+        }
+        this.render();
+      };
+      label.append(checkbox, document.createTextNode(` ${cat.name}`));
+      options.appendChild(label);
+    });
+
+    categoryWrap.append(summary, options);
+    toolbar.append(categoryWrap);
+    return toolbar;
+  }
+
+  createDateTabs(dates) {
+    const tabs = document.createElement('div');
+    tabs.className = 'tabs';
+
+    dates.forEach(date => {
+      const btn = document.createElement('button');
+      btn.className = `tab ${date === this.selectedDate ? 'active' : ''}`;
+      btn.textContent = prettyDate(date);
+      btn.onclick = () => {
+        this.selectedDate = date;
+        this.render();
+      };
+      tabs.appendChild(btn);
+    });
+
+    return tabs;
+  }
+
+  createTilesContainer(sessionsForDate) {
+    const container = document.createElement('div');
+    container.className = 'tiles-grid';
+
+    const filtered = sessionsForDate.filter(s => {
+      if (!this.selectedCategoryIds.size) {
+        return true;
+      }
+      return s.category?.id && this.selectedCategoryIds.has(s.category.id);
+    });
+
+    filtered.forEach(session => {
+      const tile = new SessionTile(session, this.theme, async sessionId => {
+        if (this.cventSdk.startSessionRegistration) {
+          await this.cventSdk.startSessionRegistration(sessionId);
+        }
+      });
+      container.appendChild(tile);
+    });
+
+    if (!filtered.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'No sessions match the selected filters.';
+      container.appendChild(empty);
+    }
+
+    return container;
+  }
+
+  createRecommendations() {
+    if (!this.configuration?.showUxRecommendations) {
+      return document.createElement('div');
+    }
+    const wrap = document.createElement('aside');
+    wrap.className = 'recommendations';
+    wrap.innerHTML = `
+      <h3>UX/UI recommendations for large session catalogs</h3>
+      <ul>
+        <li>Add search with typo tolerance and speaker/location indexing.</li>
+        <li>Add sticky summary chips for active filters and one-click clear.</li>
+        <li>Use progressive loading (infinite scroll or "load more") for 100s of tiles.</li>
+        <li>Offer sort options: start time, popularity, availability, and featured.</li>
+        <li>Add an agenda conflict indicator before registration confirmation.</li>
+      </ul>
+    `;
+    return wrap;
+  }
+
+  groupSessionsByDate(sessions) {
+    return sessions.reduce((acc, session) => {
+      const key = dateKey(session.startDateTime);
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(session);
+      return acc;
+    }, {});
+  }
+
+  getUniqueCategories(sessions) {
+    const map = new Map();
+    sessions.forEach(session => {
+      if (session.category?.id) {
+        map.set(session.category.id, session.category);
+      }
+    });
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  createStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      .widget-root { font-family: Arial, sans-serif; }
+      .header h2 { margin: 0; }
+      .header p { margin: 8px 0 12px; color: #4b5563; }
+      .toolbar { margin-bottom: 12px; }
+      .category-filter { width: fit-content; }
+      .category-options { 
+        margin-top: 8px; 
+        display: grid; 
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
+        padding: 8px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        background: #fff;
+      }
+      .tabs {
+        display: flex;
+        overflow-x: auto;
+        gap: 8px;
+        padding-bottom: 8px;
+        margin-bottom: 12px;
+      }
+      .tab {
+        border: 1px solid #d1d5db;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: white;
+        white-space: nowrap;
+      }
+      .tab.active { background: #1d4ed8; color: white; border-color: #1d4ed8; }
+      .tiles-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .empty { color: #6b7280; }
+      .recommendations {
+        margin-top: 16px;
+        border-top: 1px solid #e5e7eb;
+        padding-top: 12px;
+        color: #374151;
+      }
+      @media (max-width: 640px) {
+        .tiles-grid { grid-template-columns: 1fr; }
+      }
+    `;
+    return style;
   }
 }
