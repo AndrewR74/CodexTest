@@ -11,11 +11,12 @@ const setStylesOnElement = (styles, element) => {
 };
 
 export class SessionTile extends HTMLElement {
-  constructor(session, theme, onRegisterClick) {
+  constructor(session, theme, onRegisterClick, selectionStatus) {
     super();
     this.session = session;
     this.theme = theme || defaultTheme;
     this.onRegisterClick = onRegisterClick;
+    this.selectionStatus = selectionStatus;
     this.attachShadow({ mode: 'open' });
   }
 
@@ -41,6 +42,11 @@ export class SessionTile extends HTMLElement {
     desc.textContent = s.description || 'No description available.';
     setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 12px', fontSize: '0.9rem' }, desc);
 
+    const fee = document.createElement('p');
+    fee.className = 'fee';
+    fee.textContent = this.getFeeLabel(s);
+    setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 12px', fontSize: '0.85rem' }, fee);
+
     const badgeRow = document.createElement('div');
     badgeRow.className = 'badge-row';
 
@@ -60,8 +66,9 @@ export class SessionTile extends HTMLElement {
 
     const actionButton = document.createElement('button');
     actionButton.className = 'register-btn';
-    actionButton.textContent = s.isOpenForRegistration ? 'Register' : s.isWaitlistEnabled ? 'Join Waitlist' : 'Unavailable';
-    actionButton.disabled = !s.isOpenForRegistration && !s.isWaitlistEnabled;
+    const { text: actionText, disabled } = this.getActionButtonState();
+    actionButton.textContent = actionText;
+    actionButton.disabled = disabled;
     actionButton.onclick = () => this.onRegisterClick?.(s.id);
 
     const style = document.createElement('style');
@@ -109,7 +116,43 @@ export class SessionTile extends HTMLElement {
       }
     `;
 
-    card.append(name, meta, desc, badgeRow, actionButton);
+    card.append(name, meta, desc, fee, badgeRow, actionButton);
     this.shadowRoot.append(style, card);
+  }
+
+  getActionButtonState() {
+    const status = this.selectionStatus;
+
+    if (status === 'SELECTED') {
+      return { text: 'Unselect', disabled: false };
+    }
+
+    if (status === 'WAITLISTED') {
+      return { text: 'Leave Waitlist', disabled: false };
+    }
+
+    if (status === 'WAITLIST_AVAILABLE') {
+      return { text: 'Join Waitlist', disabled: false };
+    }
+
+    if (status === 'OPEN' || status === 'OPEN_FROM_WAITLIST') {
+      return { text: 'Register', disabled: false };
+    }
+
+    return { text: 'Unavailable', disabled: true };
+  }
+
+  getFeeLabel(session) {
+    const amount =
+      session.feeAmount ??
+      session.price ??
+      session.fee?.amount ??
+      session.fee?.chargePolicies?.find(policy => policy.isActive)?.amount;
+
+    if (amount === undefined || amount === null || Number(amount) === 0) {
+      return 'Fee: Free';
+    }
+
+    return `Fee: $${Number(amount).toFixed(2)}`;
   }
 }

@@ -18,6 +18,7 @@ export default class extends HTMLElement {
   unsubCallbacks = [];
   selectedCategoryIds = new Set();
   selectedDate = '';
+  sessionStatuses = new Map();
 
   constructor({ configuration, theme }) {
     super();
@@ -61,12 +62,31 @@ export default class extends HTMLElement {
     }
 
     this.sessions = sessions;
+    await this.refreshSessionStatuses();
     this.render();
   }
 
+
+  async refreshSessionStatuses() {
+    const statusEntries = await Promise.all(
+      (this.sessions || []).map(async session => {
+        try {
+          const status = await this.cventSdk.getSessionStatus(session.id);
+          return [session.id, status?.status || null];
+        } catch (error) {
+          return [session.id, null];
+        }
+      })
+    );
+
+    this.sessionStatuses = new Map(statusEntries);
+  }
+
   render() {
-    const grouped = this.groupSessionsByDate(this.sessions || []);
-    const categories = this.getUniqueCategories(this.sessions || []);
+    const allSessions = this.sessions || [];
+    const categories = this.getUniqueCategories(allSessions);
+    const filteredSessions = this.filterSessionsByCategories(allSessions);
+    const grouped = this.groupSessionsByDate(filteredSessions);
     const availableDates = Object.keys(grouped).sort((a, b) => new Date(a) - new Date(b));
 
     if (!this.selectedDate || !grouped[this.selectedDate]) {
@@ -148,23 +168,22 @@ export default class extends HTMLElement {
     const container = document.createElement('div');
     container.className = 'tiles-grid';
 
-    const filtered = sessionsForDate.filter(s => {
-      if (!this.selectedCategoryIds.size) {
-        return true;
-      }
-      return s.category?.id && this.selectedCategoryIds.has(s.category.id);
-    });
-
-    filtered.forEach(session => {
-      const tile = new SessionTile(session, this.theme, async sessionId => {
-        if (this.cventSdk.startSessionRegistration) {
-          await this.cventSdk.startSessionRegistration(sessionId);
-        }
-      });
+    sessionsForDate.forEach(session => {
+      const tile = new SessionTile(
+        session,
+        this.theme,
+        async sessionId => {
+          if (this.cventSdk.pickSession) {
+            await this.cventSdk.pickSession(sessionId);
+            await this.fetchAndRender();
+          }
+        },
+        this.sessionStatuses.get(session.id)
+      );
       container.appendChild(tile);
     });
 
-    if (!filtered.length) {
+    if (!sessionsForDate.length) {
       const empty = document.createElement('p');
       empty.className = 'empty';
       empty.textContent = 'No sessions match the selected filters.';
@@ -202,6 +221,14 @@ export default class extends HTMLElement {
       acc[key].push(session);
       return acc;
     }, {});
+  }
+
+  filterSessionsByCategories(sessions) {
+    if (!this.selectedCategoryIds.size) {
+      return sessions;
+    }
+
+    return sessions.filter(session => session.category?.id && this.selectedCategoryIds.has(session.category.id));
   }
 
   getUniqueCategories(sessions) {
