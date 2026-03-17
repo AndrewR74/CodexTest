@@ -2,5 +2,5 @@
   "product": "Event",
   "purpose": "SessionRegistration",
   "essential": true,
-  "customElementName": "featured-sessions"
+  "customElementName": "session-date-tabs-widget"
 }
