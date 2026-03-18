@@ -60,6 +60,8 @@ class SessionTabsEditor extends HTMLElement {
       uxLabel
     );
     this.shadowRoot.append(this.container);
+
+    this.onConfigurationUpdate(this._config);
   }
 
   onConfigurationUpdate(newConfig) {
