@@ -19,6 +19,7 @@ export default class extends HTMLElement {
   selectedCategoryIds = new Set();
   selectedDate = '';
   sessionStatuses = new Map();
+  viewMode = 'tile';
 
   constructor({ configuration, theme }) {
     super();
@@ -58,7 +59,8 @@ export default class extends HTMLElement {
 
     const sessions = [];
     for await (const page of generator) {
-      sessions.push(...page.sessions);
+      const inRangeSessions = (page.sessions || []).filter(session => this.isSessionInConfiguredRange(session));
+      sessions.push(...inRangeSessions);
     }
 
     const feesBySessionId = await this.fetchFeesBySessionId();
@@ -78,6 +80,22 @@ export default class extends HTMLElement {
     });
     await this.refreshSessionStatuses();
     this.render();
+  }
+
+  isSessionInConfiguredRange(session) {
+    const sessionDay = dateKey(session.startDateTime);
+    const startDate = this.configuration?.startDate || '';
+    const endDate = this.configuration?.endDate || '';
+
+    if (startDate && sessionDay < startDate) {
+      return false;
+    }
+
+    if (endDate && sessionDay > endDate) {
+      return false;
+    }
+
+    return true;
   }
 
   async fetchFeesBySessionId() {
@@ -112,7 +130,6 @@ export default class extends HTMLElement {
     return feesBySessionId;
   }
 
-
   async refreshSessionStatuses() {
     const statusEntries = await Promise.all(
       (this.sessions || []).map(async session => {
@@ -131,6 +148,8 @@ export default class extends HTMLElement {
   render() {
     const allSessions = this.sessions || [];
     const categories = this.getUniqueCategories(allSessions);
+    this.pruneUnavailableCategorySelections(categories);
+
     const filteredSessions = this.filterSessionsByCategories(allSessions);
     const grouped = this.groupSessionsByDate(filteredSessions);
     const availableDates = Object.keys(grouped).sort((a, b) => new Date(a) - new Date(b));
@@ -151,7 +170,19 @@ export default class extends HTMLElement {
   createHeader() {
     const header = document.createElement('div');
     header.className = 'header';
-    header.innerHTML = `<h2>Browse Sessions</h2><p>Select a date tab and refine results by category.</p>`;
+
+    const copy = document.createElement('div');
+    copy.innerHTML = '<h2>Browse Sessions</h2><p>Select a date tab and refine results by category.</p>';
+
+    const viewButton = document.createElement('button');
+    viewButton.className = 'view-toggle-btn';
+    viewButton.textContent = this.viewMode === 'tile' ? 'Switch to List View' : 'Switch to Tile View';
+    viewButton.onclick = () => {
+      this.viewMode = this.viewMode === 'tile' ? 'list' : 'tile';
+      this.render();
+    };
+
+    header.append(copy, viewButton);
     return header;
   }
 
@@ -164,8 +195,8 @@ export default class extends HTMLElement {
 
     const summary = document.createElement('summary');
     summary.textContent = this.selectedCategoryIds.size
-      ? `Categories (${this.selectedCategoryIds.size} selected)`
-      : 'Filter categories';
+      ? `Category filter (${this.selectedCategoryIds.size} selected)`
+      : 'Category filter';
 
     const options = document.createElement('div');
     options.className = 'category-options';
@@ -212,7 +243,7 @@ export default class extends HTMLElement {
 
   createTilesContainer(sessionsForDate) {
     const container = document.createElement('div');
-    container.className = 'tiles-grid';
+    container.className = this.viewMode === 'tile' ? 'tiles-grid tile-mode' : 'tiles-grid list-mode';
 
     sessionsForDate.forEach(session => {
       const tile = new SessionTile(
@@ -287,23 +318,66 @@ export default class extends HTMLElement {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  pruneUnavailableCategorySelections(categories) {
+    const categoryIds = new Set(categories.map(category => category.id));
+    this.selectedCategoryIds.forEach(categoryId => {
+      if (!categoryIds.has(categoryId)) {
+        this.selectedCategoryIds.delete(categoryId);
+      }
+    });
+  }
+
   createStyles() {
     const style = document.createElement('style');
     style.textContent = `
       .widget-root { font-family: Arial, sans-serif; }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
       .header h2 { margin: 0; }
       .header p { margin: 8px 0 12px; color: #4b5563; }
+      .view-toggle-btn {
+        border: 1px solid #2563eb;
+        background: #eff6ff;
+        color: #1d4ed8;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
       .toolbar { margin-bottom: 12px; }
-      .category-filter { width: fit-content; }
-      .category-options { 
-        margin-top: 8px; 
-        display: grid; 
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 8px;
-        padding: 8px;
+      .category-filter {
+        width: min(100%, 460px);
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        padding: 6px 10px;
+        background: #f9fafb;
+      }
+      .category-filter summary {
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #111827;
+      }
+      .category-options {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+        padding: 10px;
         border: 1px solid #e5e7eb;
         border-radius: 8px;
         background: #fff;
+      }
+      .category-options label {
+        font-size: 0.95rem;
+      }
+      .category-options input {
+        transform: scale(1.1);
       }
       .tabs {
         display: flex;
@@ -322,8 +396,13 @@ export default class extends HTMLElement {
       .tab.active { background: #1d4ed8; color: white; border-color: #1d4ed8; }
       .tiles-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
         gap: 12px;
+      }
+      .tiles-grid.tile-mode {
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      }
+      .tiles-grid.list-mode {
+        grid-template-columns: 1fr;
       }
       .empty { color: #6b7280; }
       .recommendations {
@@ -333,7 +412,14 @@ export default class extends HTMLElement {
         color: #374151;
       }
       @media (max-width: 640px) {
-        .tiles-grid { grid-template-columns: 1fr; }
+        .header {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .view-toggle-btn {
+          align-self: flex-start;
+        }
+        .tiles-grid.tile-mode { grid-template-columns: 1fr; }
       }
     `;
     return style;
