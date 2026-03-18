@@ -61,9 +61,53 @@ export default class extends HTMLElement {
       sessions.push(...page.sessions);
     }
 
-    this.sessions = sessions;
+    const feesBySessionId = await this.fetchFeesBySessionId();
+
+    this.sessions = sessions.map(session => {
+      const fee = feesBySessionId.get(session.id);
+      if (!fee) {
+        return session;
+      }
+
+      const chargePolicyAmount = getApplicableFeeAmount(fee);
+      return {
+        ...session,
+        fee,
+        feeAmount: chargePolicyAmount ?? fee.amount
+      };
+    });
     await this.refreshSessionStatuses();
     this.render();
+  }
+
+  async fetchFeesBySessionId() {
+    if (!this.cventSdk.getProductFeesGenerator) {
+      return new Map();
+    }
+
+    const feesGenerator = await this.cventSdk.getProductFeesGenerator({
+      filter: 'isActive = 1 and productType = "Session"',
+      pageSize: 200
+    });
+
+    const feesBySessionId = new Map();
+
+    for await (const page of feesGenerator) {
+      for (const fee of page.productFees || []) {
+        const productId = fee.productId;
+
+        if (!productId) {
+          continue;
+        }
+
+        const existingFee = feesBySessionId.get(productId);
+        if (!existingFee || (fee.isDefault && !existingFee.isDefault)) {
+          feesBySessionId.set(productId, fee);
+        }
+      }
+    }
+
+    return feesBySessionId;
   }
 
 
@@ -293,3 +337,17 @@ export default class extends HTMLElement {
     return style;
   }
 }
+
+const getApplicableFeeAmount = fee => {
+  const now = Date.now();
+  const activeChargePolicies = (fee?.chargePolicies || [])
+    .filter(policy => policy.isActive)
+    .filter(policy => new Date(policy.effectiveUntil).getTime() + 24 * 60 * 60 * 1000 > now)
+    .sort((a, b) => new Date(a.effectiveUntil).getTime() - new Date(b.effectiveUntil).getTime());
+
+  if (!activeChargePolicies.length) {
+    return null;
+  }
+
+  return activeChargePolicies[0].amount;
+};
