@@ -87,13 +87,15 @@ export default class extends HTMLElement {
 
     const feesGenerator = await this.cventSdk.getProductFeesGenerator({
       filter: 'isActive = 1 and productType = "Session"',
-      pageSize: 200
+      pageSize: this.configuration?.feesPageSize ?? 200
     });
 
     const feesBySessionId = new Map();
 
     for await (const page of feesGenerator) {
-      for (const fee of page.productFees || []) {
+      const feeRecords = page?.records || page?.productFees || [];
+
+      for (const fee of feeRecords) {
         const productId = fee.productId;
 
         if (!productId) {
