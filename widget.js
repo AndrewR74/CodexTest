@@ -59,13 +59,15 @@ export default class extends HTMLElement {
 
     const sessions = [];
     for await (const page of generator) {
-      const inRangeSessions = (page.sessions || []).filter(session => this.isSessionInConfiguredRange(session));
-      sessions.push(...inRangeSessions);
+      sessions.push(...(page.sessions || []));
     }
+
+    const { startDate, endDate } = this.resolveEffectiveDateRange(sessions);
+    const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
 
     const feesBySessionId = await this.fetchFeesBySessionId();
 
-    this.sessions = sessions.map(session => {
+    this.sessions = inRangeSessions.map(session => {
       const fee = feesBySessionId.get(session.id);
       if (!fee) {
         return session;
@@ -82,10 +84,30 @@ export default class extends HTMLElement {
     this.render();
   }
 
-  isSessionInConfiguredRange(session) {
+  resolveEffectiveDateRange(sessions) {
+    const sessionDateKeys = sessions.map(session => dateKey(session.startDateTime)).sort();
+    const firstSessionDate = sessionDateKeys[0] || '';
+    const lastSessionDate = sessionDateKeys[sessionDateKeys.length - 1] || '';
+
+    const configStartDate = this.normalizeDateInput(this.configuration?.startDate);
+    const configEndDate = this.normalizeDateInput(this.configuration?.endDate);
+
+    return {
+      startDate: configStartDate || firstSessionDate,
+      endDate: configEndDate || lastSessionDate
+    };
+  }
+
+  normalizeDateInput(value) {
+    if (!value || typeof value !== 'string') {
+      return '';
+    }
+
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+  }
+
+  isSessionInConfiguredRange(session, startDate, endDate) {
     const sessionDay = dateKey(session.startDateTime);
-    const startDate = this.configuration?.startDate || '';
-    const endDate = this.configuration?.endDate || '';
 
     if (startDate && sessionDay < startDate) {
       return false;
