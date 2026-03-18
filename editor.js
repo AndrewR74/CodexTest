@@ -1,7 +1,9 @@
 class SessionTabsEditor extends HTMLElement {
-  constructor() {
+  constructor({ initialConfiguration = {}, setConfiguration } = {}) {
     super();
     this.attachShadow({ mode: 'open' });
+    this._config = initialConfiguration;
+    this.setConfig = setConfiguration;
 
     this.container = document.createElement('div');
     this.container.style.fontFamily = 'Arial, sans-serif';
@@ -69,7 +71,11 @@ class SessionTabsEditor extends HTMLElement {
   }
 
   pushConfig() {
-    this.setConfiguration({
+    if (!this.setConfig) {
+      return;
+    }
+
+    this.setConfig({
       ...this._config,
       pageSize: Number(this.pageSizeInput.value) || 50,
       showUxRecommendations: !!this.uxToggle.checked,
