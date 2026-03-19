@@ -175,7 +175,7 @@ export default class extends HTMLElement {
       (this.sessions || []).map(async session => {
         try {
           const status = await this.cventSdk.getSessionStatus(session.id);
-          return [session.id, status?.status || null];
+          return [session.id, status || null];
         } catch (error) {
           return [session.id, null];
         }
@@ -291,9 +291,21 @@ export default class extends HTMLElement {
         this.theme,
         async sessionId => {
           if (this.cventSdk.pickSession) {
-            await this.cventSdk.pickSession(sessionId);
-            await this.fetchAndRender();
+            const pickResult = await this.cventSdk.pickSession(sessionId);
+
+            if (!pickResult?.success) {
+              return { success: false };
+            }
+
+            const updatedStatus = await this.cventSdk.getSessionStatus(sessionId);
+            this.sessionStatuses.set(sessionId, updatedStatus || null);
+
+            return {
+              success: true,
+              status: updatedStatus || null
+            };
           }
+          return { success: false };
         },
         this.sessionStatuses.get(session.id)
       );

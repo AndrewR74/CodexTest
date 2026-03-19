@@ -66,10 +66,20 @@ export class SessionTile extends HTMLElement {
 
     const actionButton = document.createElement('button');
     actionButton.className = 'register-btn';
-    const { text: actionText, disabled } = this.getActionButtonState();
-    actionButton.textContent = actionText;
-    actionButton.disabled = disabled;
-    actionButton.onclick = () => this.onRegisterClick?.(s.id);
+    this.updateActionButton(actionButton, this.getActionButtonState());
+    actionButton.onclick = async () => {
+      actionButton.disabled = true;
+      actionButton.textContent = 'Processing...';
+
+      const result = await this.onRegisterClick?.(s.id);
+      if (!result?.success) {
+        this.updateActionButton(actionButton, this.getActionButtonState());
+        return;
+      }
+
+      this.selectionStatus = result.status || this.selectionStatus;
+      this.updateActionButton(actionButton, this.getActionButtonState());
+    };
 
     const style = document.createElement('style');
     style.textContent = `
@@ -110,8 +120,26 @@ export class SessionTile extends HTMLElement {
         font-weight: 600;
         cursor: pointer;
       }
-      .register-btn:disabled {
+      .register-btn.tone-register {
+        background: #2563eb;
+      }
+      .register-btn.tone-registered {
+        background: #059669;
+      }
+      .register-btn.tone-waitlist {
+        background: #d97706;
+      }
+      .register-btn.tone-remove {
+        background: #b91c1c;
+      }
+      .register-btn.tone-included {
+        background: #7c3aed;
+      }
+      .register-btn.tone-unavailable {
         background: #9ca3af;
+      }
+      .register-btn:disabled {
+        opacity: 0.9;
         cursor: not-allowed;
       }
     `;
@@ -120,29 +148,51 @@ export class SessionTile extends HTMLElement {
     this.shadowRoot.append(style, card);
   }
 
+  getStatusCode() {
+    if (typeof this.selectionStatus === 'string') {
+      return this.selectionStatus;
+    }
+    return this.selectionStatus?.status || null;
+  }
+
+  updateActionButton(button, actionState) {
+    button.textContent = actionState.text;
+    button.disabled = actionState.disabled;
+    button.className = `register-btn tone-${actionState.tone}`;
+  }
+
   getActionButtonState() {
-    const status = this.selectionStatus;
+    const status = this.getStatusCode();
 
     if (status === 'SELECTED') {
-      return { text: 'Unselect', disabled: false };
+      return { text: 'Registered', disabled: false, tone: 'registered' };
     }
 
     if (status === 'WAITLISTED') {
-      return { text: 'Leave Waitlist', disabled: false };
+      return { text: 'Leave Waitlist', disabled: false, tone: 'waitlist' };
     }
 
     if (status === 'WAITLIST_AVAILABLE') {
-      return { text: 'Join Waitlist', disabled: false };
+      return { text: 'Join Waitlist', disabled: false, tone: 'waitlist' };
     }
 
     if (status === 'OPEN' || status === 'OPEN_FROM_WAITLIST') {
-      return { text: 'Register', disabled: false };
+      return { text: 'Register', disabled: false, tone: 'register' };
     }
 
-    return { text: 'Unavailable', disabled: true };
+    if (status === 'INCLUDED' || status === 'BUNDLED') {
+      return { text: 'Included', disabled: true, tone: 'included' };
+    }
+
+    return { text: 'Unavailable', disabled: true, tone: 'unavailable' };
   }
 
   getFeeLabel(session) {
+    const status = this.getStatusCode();
+    if (status === 'INCLUDED' || status === 'BUNDLED') {
+      return 'Fee: Included';
+    }
+
     const amount =
       session.feeAmount ??
       session.price ??
