@@ -79,6 +79,8 @@ export default class extends HTMLElement {
   async fetchAndRender() {
     this.isLoading = true;
     this.loadingMessage = 'Loading sessions and fees...';
+    this.sessions = [];
+    this.sessionStatuses = new Map();
     this.render();
 
     const generator = await this.cventSdk.getSessionGenerator('nameAsc', this.configuration?.pageSize ?? 50, {
@@ -87,16 +89,19 @@ export default class extends HTMLElement {
 
     const sessions = [];
     for await (const page of generator) {
-      sessions.push(...(page.sessions || []));
+      const pageSessions = page.sessions || [];
+      sessions.push(...pageSessions);
+      this.sessions = [...sessions];
+      this.render();
     }
 
     const { startDate, endDate } = this.resolveEffectiveDateRange(sessions);
     const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
+    this.sessions = [...inRangeSessions];
+    this.render();
 
     const feesBySessionId = await this.fetchFeesBySessionId();
     this.loadingMessage = 'Loading registration statuses...';
-    this.render();
-
     this.sessions = inRangeSessions.map(session => {
       const fee = feesBySessionId.get(session.id);
       if (!fee) {
@@ -382,9 +387,6 @@ export default class extends HTMLElement {
     const leftColumn = this.sessionList;
     leftColumn.replaceChildren();
 
-    if (this.isLoading) {
-      leftColumn.appendChild(this.createLoadingState());
-    } else {
     sessions.forEach(session => {
       const tile = new SessionTile(
         session,
@@ -411,12 +413,15 @@ export default class extends HTMLElement {
       leftColumn.appendChild(tile);
     });
 
-    if (!sessions.length) {
+    if (!sessions.length && !this.isLoading) {
       const empty = document.createElement('p');
       empty.className = 'empty';
       empty.textContent = 'No sessions match the selected filters.';
       leftColumn.appendChild(empty);
     }
+
+    if (this.isLoading) {
+      leftColumn.appendChild(this.createLoadingState());
     }
 
     this.updateScheduleSidebar(scheduleEntries);
@@ -785,7 +790,7 @@ export default class extends HTMLElement {
         align-items: center;
         justify-content: center;
         gap: 8px;
-        min-height: 220px;
+        min-height: 120px;
         background: #fff;
         border: 1px solid #ececec;
         border-radius: 12px;
