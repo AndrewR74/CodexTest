@@ -86,21 +86,18 @@ export default class extends HTMLElement {
     const generator = await this.cventSdk.getSessionGenerator('nameAsc', this.configuration?.pageSize ?? 50, {
       byRegistrationTypeAndAdmissionItem: true
     });
+    const feesBySessionIdPromise = this.fetchFeesBySessionId();
 
     const sessions = [];
     for await (const page of generator) {
       const pageSessions = page.sessions || [];
       sessions.push(...pageSessions);
-      this.sessions = [...sessions];
-      this.render();
     }
 
     const { startDate, endDate } = this.resolveEffectiveDateRange(sessions);
     const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
-    this.sessions = [...inRangeSessions];
-    this.render();
 
-    const feesBySessionId = await this.fetchFeesBySessionId();
+    const feesBySessionId = await feesBySessionIdPromise;
     this.loadingMessage = 'Loading registration statuses...';
     this.sessions = inRangeSessions.map(session => {
       const fee = feesBySessionId.get(session.id);
@@ -115,6 +112,8 @@ export default class extends HTMLElement {
         feeAmount: chargePolicyAmount ?? fee.amount
       };
     });
+
+    this.render();
     await this.refreshSessionStatuses();
     this.isLoading = false;
     this.render();
