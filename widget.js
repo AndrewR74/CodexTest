@@ -26,7 +26,7 @@ const prettyDate = value => {
     : new Date(value);
 
   return date.toLocaleDateString(undefined, {
-    weekday: 'short',
+    weekday: 'long',
     month: 'short',
     day: 'numeric'
   });
@@ -34,10 +34,13 @@ const prettyDate = value => {
 
 export default class extends HTMLElement {
   unsubCallbacks = [];
-  selectedCategoryIds = new Set();
-  selectedDate = '';
+  selectedCategoryId = '';
+  selectedDate = 'ALL';
+  selectedType = 'ALL';
+  sortBy = 'START_TIME';
+  searchQuery = '';
   sessionStatuses = new Map();
-  viewMode = 'tile';
+  showMobileFilters = false;
 
   constructor({ configuration, theme }) {
     super();
@@ -188,118 +191,187 @@ export default class extends HTMLElement {
   render() {
     const allSessions = this.sessions || [];
     const categories = this.getUniqueCategories(allSessions);
-    this.pruneUnavailableCategorySelections(categories);
-
-    const filteredSessions = this.filterSessionsByCategories(allSessions);
-    const grouped = this.groupSessionsByDate(filteredSessions);
-    const availableDates = Object.keys(grouped).sort((a, b) => new Date(a) - new Date(b));
-
-    if (!this.selectedDate || !grouped[this.selectedDate]) {
-      this.selectedDate = availableDates[0] || '';
+    if (this.selectedCategoryId && !categories.find(category => category.id === this.selectedCategoryId)) {
+      this.selectedCategoryId = '';
     }
 
+    const filteredSessions = this.getFilteredAndSortedSessions(allSessions);
+    const selectedDaySessions =
+      this.selectedDate === 'ALL'
+        ? filteredSessions
+        : filteredSessions.filter(session => dateKey(session.startDateTime) === this.selectedDate);
+
+    const scheduleEntries = this.getScheduleEntries();
+
     this.root.replaceChildren(
-      this.createHeader(),
-      this.createToolbar(categories),
-      this.createDateTabs(availableDates),
-      this.createTilesContainer(grouped[this.selectedDate] || []),
+      this.createPageTitleSection(),
+      this.createCategoryTabs(categories),
+      this.createFilterToolbar(),
+      this.createMainContent(selectedDaySessions, scheduleEntries),
       this.createRecommendations()
     );
   }
 
-  createHeader() {
+  createPageTitleSection() {
     const header = document.createElement('div');
-    header.className = 'header';
-
-    const copy = document.createElement('div');
-    copy.innerHTML = '<h2>Browse Sessions</h2><p>Select a date tab and refine results by category.</p>';
-
-    const viewButton = document.createElement('button');
-    viewButton.className = 'view-toggle-btn';
-    viewButton.textContent = this.viewMode === 'tile' ? 'Switch to List View' : 'Switch to Tile View';
-    viewButton.onclick = () => {
-      this.viewMode = this.viewMode === 'tile' ? 'list' : 'tile';
-      this.render();
-    };
-
-    header.append(copy, viewButton);
+    header.className = 'page-title-section';
+    header.innerHTML = `
+      <h2>Build Your Weekend Schedule</h2>
+      <p>Browse sessions, refine results, and add your favorites to a live schedule summary.</p>
+    `;
     return header;
   }
 
-  createToolbar(categories) {
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
+  createCategoryTabs(categories) {
+    const wrap = document.createElement('div');
+    wrap.className = 'category-tabs';
 
-    const categoryWrap = document.createElement('details');
-    categoryWrap.className = 'category-filter';
+    const allButton = document.createElement('button');
+    allButton.className = `category-pill ${!this.selectedCategoryId ? 'active' : ''}`;
+    allButton.textContent = 'All Categories';
+    allButton.onclick = () => {
+      this.selectedCategoryId = '';
+      this.render();
+    };
+    wrap.appendChild(allButton);
 
-    const summary = document.createElement('summary');
-    summary.textContent = this.selectedCategoryIds.size
-      ? `Category filter (${this.selectedCategoryIds.size} selected)`
-      : 'Category filter';
-
-    const options = document.createElement('div');
-    options.className = 'category-options';
-
-    categories.forEach(cat => {
-      const label = document.createElement('label');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = this.selectedCategoryIds.has(cat.id);
-      checkbox.onchange = () => {
-        if (checkbox.checked) {
-          this.selectedCategoryIds.add(cat.id);
-        } else {
-          this.selectedCategoryIds.delete(cat.id);
-        }
+    categories.forEach(category => {
+      const button = document.createElement('button');
+      button.className = `category-pill ${this.selectedCategoryId === category.id ? 'active' : ''}`;
+      button.textContent = category.name;
+      button.onclick = () => {
+        this.selectedCategoryId = category.id;
         this.render();
       };
-      label.append(checkbox, document.createTextNode(` ${cat.name}`));
-      options.appendChild(label);
+      wrap.appendChild(button);
     });
 
-    categoryWrap.append(summary, options);
-    toolbar.append(categoryWrap);
+    return wrap;
+  }
+
+  createFilterToolbar() {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar-wrap';
+
+    const compactControls = document.createElement('div');
+    compactControls.className = 'compact-controls';
+
+    const filtersButton = document.createElement('button');
+    filtersButton.className = 'compact-btn';
+    filtersButton.textContent = this.showMobileFilters ? 'Hide Filters' : 'Filters';
+    filtersButton.onclick = () => {
+      this.showMobileFilters = !this.showMobileFilters;
+      this.render();
+    };
+
+    const sortButton = document.createElement('button');
+    sortButton.className = 'compact-btn';
+    sortButton.textContent = 'Sort';
+    sortButton.onclick = () => {
+      const options = ['START_TIME', 'NAME', 'PRICE'];
+      const currentIndex = options.indexOf(this.sortBy);
+      this.sortBy = options[(currentIndex + 1) % options.length];
+      this.render();
+    };
+
+    compactControls.append(filtersButton, sortButton);
+
+    const row = document.createElement('div');
+    row.className = `toolbar ${this.showMobileFilters ? 'show-mobile' : ''}`;
+
+    const dayFilter = this.createSelectControl('Day', this.selectedDate, this.getDayFilterOptions(), value => {
+      this.selectedDate = value;
+      this.render();
+    });
+
+    const typeFilter = this.createSelectControl(
+      'Session type',
+      this.selectedType,
+      [
+        ['ALL', 'All'],
+        ['SHOW', 'Show'],
+        ['WORKSHOP', 'Workshop'],
+        ['DINING', 'Dining'],
+        ['SPECIAL', 'Special']
+      ],
+      value => {
+        this.selectedType = value;
+        this.render();
+      }
+    );
+
+    const sortFilter = this.createSelectControl(
+      'Sort',
+      this.sortBy,
+      [
+        ['START_TIME', 'Start time'],
+        ['NAME', 'Name'],
+        ['PRICE', 'Price']
+      ],
+      value => {
+        this.sortBy = value;
+        this.render();
+      }
+    );
+
+    const searchWrap = document.createElement('label');
+    searchWrap.className = 'search-wrap';
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.placeholder = 'Search sessions';
+    searchInput.value = this.searchQuery;
+    searchInput.oninput = () => {
+      this.searchQuery = searchInput.value;
+      this.render();
+    };
+    searchWrap.append(searchInput);
+
+    row.append(dayFilter, typeFilter, sortFilter, searchWrap);
+    toolbar.append(compactControls, row);
     return toolbar;
   }
 
-  createDateTabs(dates) {
-    const tabs = document.createElement('div');
-    tabs.className = 'tabs';
+  createSelectControl(labelText, value, options, onChange) {
+    const label = document.createElement('label');
+    label.className = 'control';
 
-    dates.forEach(date => {
-      const btn = document.createElement('button');
-      btn.className = `tab ${date === this.selectedDate ? 'active' : ''}`;
-      btn.textContent = prettyDate(date);
-      btn.onclick = () => {
-        this.selectedDate = date;
-        this.render();
-      };
-      tabs.appendChild(btn);
+    const title = document.createElement('span');
+    title.textContent = labelText;
+
+    const select = document.createElement('select');
+    options.forEach(([optionValue, optionLabel]) => {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionLabel;
+      option.selected = optionValue === value;
+      select.appendChild(option);
     });
 
-    return tabs;
+    select.onchange = () => onChange(select.value);
+    label.append(title, select);
+    return label;
   }
 
-  createTilesContainer(sessionsForDate) {
-    const container = document.createElement('div');
-    container.className = this.viewMode === 'tile' ? 'tiles-grid tile-mode' : 'tiles-grid list-mode';
+  createMainContent(sessions, scheduleEntries) {
+    const layout = document.createElement('div');
+    layout.className = 'main-layout';
 
-    sessionsForDate.forEach(session => {
+    const leftColumn = document.createElement('div');
+    leftColumn.className = 'session-list';
+    sessions.forEach(session => {
       const tile = new SessionTile(
         session,
         this.theme,
         async sessionId => {
           if (this.cventSdk.pickSession) {
             const pickResult = await this.cventSdk.pickSession(sessionId);
-
             if (!pickResult?.success) {
               return { success: false };
             }
 
             const updatedStatus = await this.cventSdk.getSessionStatus(sessionId);
             this.sessionStatuses.set(sessionId, updatedStatus || null);
-
+            this.render();
             return {
               success: true,
               status: updatedStatus || null
@@ -309,23 +381,108 @@ export default class extends HTMLElement {
         },
         this.sessionStatuses.get(session.id)
       );
-      container.appendChild(tile);
+      leftColumn.appendChild(tile);
     });
 
-    if (!sessionsForDate.length) {
+    if (!sessions.length) {
       const empty = document.createElement('p');
       empty.className = 'empty';
       empty.textContent = 'No sessions match the selected filters.';
-      container.appendChild(empty);
+      leftColumn.appendChild(empty);
     }
 
-    return container;
+    const rightColumn = this.createScheduleSidebar(scheduleEntries);
+    layout.append(leftColumn, rightColumn);
+    return layout;
+  }
+
+  createScheduleSidebar(scheduleEntries) {
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'schedule-sidebar';
+
+    const heading = document.createElement('h3');
+    heading.textContent = `My Schedule (${scheduleEntries.length})`;
+    sidebar.appendChild(heading);
+
+    if (!scheduleEntries.length) {
+      const empty = document.createElement('p');
+      empty.className = 'schedule-empty';
+      empty.textContent = 'Add sessions to build your weekend plan.';
+      sidebar.appendChild(empty);
+    } else {
+      const grouped = scheduleEntries.reduce((acc, entry) => {
+        if (!acc[entry.day]) {
+          acc[entry.day] = [];
+        }
+        acc[entry.day].push(entry);
+        return acc;
+      }, {});
+
+      Object.keys(grouped)
+        .sort((a, b) => new Date(a) - new Date(b))
+        .forEach(day => {
+          const dayGroup = document.createElement('section');
+          dayGroup.className = 'schedule-day';
+
+          const dayTitle = document.createElement('h4');
+          dayTitle.textContent = prettyDate(day);
+          dayGroup.appendChild(dayTitle);
+
+          grouped[day]
+            .sort((a, b) => new Date(a.session.startDateTime) - new Date(b.session.startDateTime))
+            .forEach(entry => {
+              const row = document.createElement('div');
+              row.className = 'schedule-item';
+
+              const left = document.createElement('div');
+              left.className = 'schedule-item-meta';
+              left.innerHTML = `
+                <p class="time">${entry.time}</p>
+                <p class="name">${entry.session.name}</p>
+                <span class="mini-badge ${entry.isIncluded ? 'included' : 'price'}">${entry.label}</span>
+              `;
+
+              const removeBtn = document.createElement('button');
+              removeBtn.className = 'remove-btn';
+              removeBtn.textContent = 'Remove';
+              removeBtn.onclick = async () => {
+                if (this.cventSdk.pickSession) {
+                  await this.cventSdk.pickSession(entry.session.id);
+                  const updatedStatus = await this.cventSdk.getSessionStatus(entry.session.id);
+                  this.sessionStatuses.set(entry.session.id, updatedStatus || null);
+                  this.render();
+                }
+              };
+
+              row.append(left, removeBtn);
+              dayGroup.appendChild(row);
+            });
+
+          sidebar.appendChild(dayGroup);
+        });
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'schedule-summary';
+    const total = scheduleEntries.reduce((sum, entry) => sum + (entry.isIncluded ? 0 : entry.amount), 0);
+    summary.innerHTML = `<p>Session add-on total: <strong>$${total.toFixed(2)}</strong></p>`;
+
+    const continueButton = document.createElement('button');
+    continueButton.className = 'continue-btn';
+    continueButton.textContent = 'Continue';
+    continueButton.disabled = !scheduleEntries.length;
+
+    summary.appendChild(continueButton);
+    sidebar.appendChild(summary);
+
+    return sidebar;
   }
 
   createRecommendations() {
     if (!this.configuration?.showUxRecommendations) {
       return document.createElement('div');
     }
+
     const wrap = document.createElement('aside');
     wrap.className = 'recommendations';
     wrap.innerHTML = `
@@ -341,23 +498,91 @@ export default class extends HTMLElement {
     return wrap;
   }
 
-  groupSessionsByDate(sessions) {
-    return sessions.reduce((acc, session) => {
-      const key = dateKey(session.startDateTime);
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(session);
-      return acc;
-    }, {});
+  getScheduleEntries() {
+    return (this.sessions || [])
+      .filter(session => {
+        const code = this.getStatusCodeForSession(session.id);
+        return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(code);
+      })
+      .map(session => {
+        const amount = this.resolveSessionAmount(session);
+        const isIncluded = amount === 0 || ['INCLUDED', 'BUNDLED'].includes(this.getStatusCodeForSession(session.id));
+        return {
+          session,
+          day: dateKey(session.startDateTime),
+          time: this.getSessionTimeLabel(session),
+          amount,
+          isIncluded,
+          label: isIncluded ? 'Included' : `$${amount.toFixed(2)} add-on`
+        };
+      });
   }
 
-  filterSessionsByCategories(sessions) {
-    if (!this.selectedCategoryIds.size) {
-      return sessions;
+  getStatusCodeForSession(sessionId) {
+    const status = this.sessionStatuses.get(sessionId);
+    if (typeof status === 'string') {
+      return status;
+    }
+    return status?.status || '';
+  }
+
+  getSessionTimeLabel(session) {
+    const start = new Date(session.startDateTime);
+    return start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  resolveSessionAmount(session) {
+    const amount =
+      session.feeAmount ??
+      session.price ??
+      session.fee?.amount ??
+      session.fee?.chargePolicies?.find(policy => policy.isActive)?.amount;
+    if (amount === undefined || amount === null) {
+      return 0;
+    }
+    return Number(amount) || 0;
+  }
+
+  getDayFilterOptions() {
+    const days = [...new Set((this.sessions || []).map(session => dateKey(session.startDateTime)).filter(Boolean))].sort();
+    return [['ALL', 'All days'], ...days.map(day => [day, prettyDate(day)])];
+  }
+
+  getFilteredAndSortedSessions(sessions) {
+    let filtered = [...sessions];
+
+    if (this.selectedCategoryId) {
+      filtered = filtered.filter(session => session.category?.id === this.selectedCategoryId);
     }
 
-    return sessions.filter(session => session.category?.id && this.selectedCategoryIds.has(session.category.id));
+    if (this.selectedType !== 'ALL') {
+      filtered = filtered.filter(session => (session.type || '').toUpperCase() === this.selectedType);
+    }
+
+    const search = this.searchQuery.trim().toLowerCase();
+    if (search) {
+      filtered = filtered.filter(session => {
+        const haystack = [session.name, session.description, session.location?.name, session.category?.name]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(search);
+      });
+    }
+
+    filtered.sort((a, b) => {
+      if (this.sortBy === 'NAME') {
+        return a.name.localeCompare(b.name);
+      }
+
+      if (this.sortBy === 'PRICE') {
+        return this.resolveSessionAmount(a) - this.resolveSessionAmount(b);
+      }
+
+      return new Date(a.startDateTime) - new Date(b.startDateTime);
+    });
+
+    return filtered;
   }
 
   getUniqueCategories(sessions) {
@@ -370,108 +595,225 @@ export default class extends HTMLElement {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  pruneUnavailableCategorySelections(categories) {
-    const categoryIds = new Set(categories.map(category => category.id));
-    this.selectedCategoryIds.forEach(categoryId => {
-      if (!categoryIds.has(categoryId)) {
-        this.selectedCategoryIds.delete(categoryId);
-      }
-    });
-  }
-
   createStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      .widget-root { font-family: Arial, sans-serif; }
-      .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-      }
-      .header h2 { margin: 0; }
-      .header p { margin: 8px 0 12px; color: #4b5563; }
-      .view-toggle-btn {
-        border: 1px solid #2563eb;
-        background: #eff6ff;
-        color: #1d4ed8;
-        border-radius: 8px;
-        padding: 10px 14px;
-        font-weight: 600;
-        cursor: pointer;
-        white-space: nowrap;
-      }
-      .toolbar { margin-bottom: 12px; }
-      .category-filter {
-        width: min(100%, 460px);
-        border: 1px solid #d1d5db;
-        border-radius: 10px;
-        padding: 6px 10px;
-        background: #f9fafb;
-      }
-      .category-filter summary {
-        cursor: pointer;
-        font-size: 1rem;
-        font-weight: 700;
+      .widget-root {
+        font-family: Arial, sans-serif;
+        background: #f8f5f4;
+        border-radius: 20px;
+        padding: 20px;
         color: #111827;
       }
-      .category-options {
-        margin-top: 12px;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 10px;
-        padding: 10px;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        background: #fff;
+      .page-title-section {
+        text-align: center;
+        margin-bottom: 16px;
       }
-      .category-options label {
-        font-size: 0.95rem;
+      .page-title-section h2 {
+        margin: 0;
+        font-size: clamp(1.6rem, 3vw, 2.25rem);
       }
-      .category-options input {
-        transform: scale(1.1);
+      .page-title-section p {
+        margin: 10px auto 0;
+        max-width: 720px;
+        color: #4b5563;
       }
-      .tabs {
+      .category-tabs {
         display: flex;
+        gap: 10px;
         overflow-x: auto;
-        gap: 8px;
         padding-bottom: 8px;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
       }
-      .tab {
-        border: 1px solid #d1d5db;
+      .category-pill {
+        border: 1px solid #d6d3d1;
+        background: #fff;
+        color: #7f1d1d;
         border-radius: 999px;
-        padding: 8px 12px;
-        background: white;
+        padding: 10px 16px;
+        font-weight: 700;
         white-space: nowrap;
+        cursor: pointer;
       }
-      .tab.active { background: #1d4ed8; color: white; border-color: #1d4ed8; }
-      .tiles-grid {
+      .category-pill.active {
+        background: #8b1d2c;
+        color: #fff;
+        border-color: #8b1d2c;
+      }
+      .toolbar-wrap {
+        margin-bottom: 16px;
+      }
+      .compact-controls {
+        display: none;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .compact-btn {
+        border: 1px solid #d1d5db;
+        background: #fff;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-weight: 700;
+        color: #374151;
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: end;
+      }
+      .control {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 0.8rem;
+        color: #6b7280;
+      }
+      .control select,
+      .search-wrap input {
+        border: 1px solid #d1d5db;
+        background: #fff;
+        border-radius: 12px;
+        padding: 10px 12px;
+        min-width: 160px;
+      }
+      .search-wrap {
+        margin-left: auto;
+      }
+      .search-wrap input {
+        min-width: 260px;
+      }
+      .main-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+        gap: 16px;
+        align-items: start;
+      }
+      .session-list {
         display: grid;
         gap: 12px;
       }
-      .tiles-grid.tile-mode {
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      .schedule-sidebar {
+        position: sticky;
+        top: 12px;
+        background: #fff;
+        border: 1px solid #ececec;
+        border-radius: 16px;
+        box-shadow: 0 14px 28px rgba(31, 41, 55, 0.08);
+        padding: 14px;
       }
-      .tiles-grid.list-mode {
-        grid-template-columns: 1fr;
+      .schedule-sidebar h3 {
+        margin: 0 0 12px;
       }
-      .empty { color: #6b7280; }
+      .schedule-empty {
+        margin: 0;
+        color: #6b7280;
+      }
+      .schedule-day {
+        border-top: 1px solid #f1f5f9;
+        padding-top: 10px;
+        margin-top: 10px;
+      }
+      .schedule-day h4 {
+        margin: 0 0 8px;
+        color: #4b5563;
+      }
+      .schedule-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 0;
+      }
+      .schedule-item .time,
+      .schedule-item .name {
+        margin: 0;
+      }
+      .schedule-item .time {
+        font-size: 0.8rem;
+        color: #6b7280;
+      }
+      .schedule-item .name {
+        font-size: 0.88rem;
+      }
+      .mini-badge {
+        display: inline-block;
+        margin-top: 4px;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 0.74rem;
+      }
+      .mini-badge.included {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .mini-badge.price {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .remove-btn {
+        border: none;
+        background: transparent;
+        color: #991b1b;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .schedule-summary {
+        border-top: 1px solid #e5e7eb;
+        margin-top: 12px;
+        padding-top: 12px;
+      }
+      .schedule-summary p {
+        margin: 0 0 10px;
+      }
+      .continue-btn {
+        width: 100%;
+        border: none;
+        border-radius: 12px;
+        padding: 10px;
+        background: #8b1d2c;
+        color: #fff;
+        font-weight: 700;
+      }
+      .continue-btn:disabled {
+        background: #d1d5db;
+        color: #6b7280;
+      }
+      .empty {
+        color: #6b7280;
+      }
       .recommendations {
         margin-top: 16px;
         border-top: 1px solid #e5e7eb;
         padding-top: 12px;
         color: #374151;
       }
-      @media (max-width: 640px) {
-        .header {
+      @media (max-width: 920px) {
+        .main-layout {
+          grid-template-columns: 1fr;
+        }
+        .schedule-sidebar {
+          position: static;
+        }
+      }
+      @media (max-width: 760px) {
+        .toolbar {
+          display: none;
           flex-direction: column;
           align-items: stretch;
         }
-        .view-toggle-btn {
-          align-self: flex-start;
+        .toolbar.show-mobile {
+          display: flex;
         }
-        .tiles-grid.tile-mode { grid-template-columns: 1fr; }
+        .compact-controls {
+          display: flex;
+        }
+        .search-wrap {
+          margin-left: 0;
+        }
+        .search-wrap input,
+        .control select {
+          width: 100%;
+          min-width: 0;
+        }
       }
     `;
     return style;

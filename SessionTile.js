@@ -10,6 +10,16 @@ const setStylesOnElement = (styles, element) => {
   });
 };
 
+const getTimeRangeLabel = session => {
+  const start = new Date(session.startDateTime);
+  const end = new Date(session.endDateTime);
+
+  return `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })}`;
+};
+
 export class SessionTile extends HTMLElement {
   constructor(session, theme, onRegisterClick, selectionStatus) {
     super();
@@ -25,44 +35,65 @@ export class SessionTile extends HTMLElement {
     const card = document.createElement('article');
     card.className = 'tile';
 
+    const media = document.createElement('div');
+    media.className = 'media';
+
+    const image = document.createElement('img');
+    image.className = 'thumb';
+    image.src = s.imageUrl || s.image?.url || 'https://via.placeholder.com/160x110/efe2e2/8b1d2c?text=Session';
+    image.alt = `${s.name} preview`;
+    media.appendChild(image);
+
+    const content = document.createElement('div');
+    content.className = 'content';
+
     const name = document.createElement('h3');
     name.textContent = s.name;
     setStylesOnElement({ ...defaultTheme.header3, ...this.theme.header3, margin: '0 0 8px' }, name);
 
-    const meta = document.createElement('p');
-    const start = new Date(s.startDateTime);
-    const end = new Date(s.endDateTime);
-    meta.textContent = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString(
-      [],
-      { hour: '2-digit', minute: '2-digit' }
-    )}${s.location?.name ? ` • ${s.location.name}` : ''}`;
-    setStylesOnElement({ ...defaultTheme.altParagraph, ...this.theme.altParagraph, margin: '0 0 8px', fontSize: '0.85rem' }, meta);
-
     const desc = document.createElement('p');
     desc.textContent = s.description || 'No description available.';
-    setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 12px', fontSize: '0.9rem' }, desc);
+    setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 8px', fontSize: '0.92rem' }, desc);
 
-    const fee = document.createElement('p');
-    fee.className = 'fee';
-    fee.textContent = this.getFeeLabel(s);
-    setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 12px', fontSize: '0.85rem' }, fee);
+    const location = document.createElement('p');
+    location.textContent = s.location?.name ? `Location: ${s.location.name}` : 'Location: TBA';
+    setStylesOnElement({ ...defaultTheme.altParagraph, ...this.theme.altParagraph, margin: '0 0 10px', fontSize: '0.82rem' }, location);
 
     const badgeRow = document.createElement('div');
     badgeRow.className = 'badge-row';
 
-    if (s.category?.name) {
-      const category = document.createElement('span');
-      category.className = 'badge';
-      category.textContent = s.category.name;
-      badgeRow.appendChild(category);
+    const statusBadge = document.createElement('span');
+    const statusCode = this.getStatusCode();
+    if (statusCode === 'WAITLISTED' || statusCode === 'WAITLIST_AVAILABLE') {
+      statusBadge.className = 'badge waitlist';
+      statusBadge.textContent = 'Waitlist';
+      badgeRow.appendChild(statusBadge);
+    } else if (statusCode === 'INCLUDED' || statusCode === 'BUNDLED') {
+      statusBadge.className = 'badge included';
+      statusBadge.textContent = 'Included';
+      badgeRow.appendChild(statusBadge);
     }
 
-    if (s.isFeatured) {
-      const featured = document.createElement('span');
-      featured.className = 'badge featured';
-      featured.textContent = 'Featured';
-      badgeRow.appendChild(featured);
+    if (s.category?.name) {
+      const typeBadge = document.createElement('span');
+      typeBadge.className = 'badge neutral';
+      typeBadge.textContent = `Type: ${s.category.name}`;
+      badgeRow.appendChild(typeBadge);
     }
+
+    const priceBadge = document.createElement('span');
+    priceBadge.className = 'badge price';
+    priceBadge.textContent = this.getFeeLabel(s);
+    badgeRow.appendChild(priceBadge);
+
+    content.append(name, desc, location, badgeRow);
+
+    const actionPanel = document.createElement('div');
+    actionPanel.className = 'action-panel';
+
+    const datetime = document.createElement('p');
+    datetime.className = 'datetime';
+    datetime.textContent = getTimeRangeLabel(s);
 
     const actionButton = document.createElement('button');
     actionButton.className = 'register-btn';
@@ -81,60 +112,83 @@ export class SessionTile extends HTMLElement {
       this.updateActionButton(actionButton, this.getActionButtonState());
     };
 
+    actionPanel.append(datetime, actionButton);
+    card.append(media, content, actionPanel);
+
     const style = document.createElement('style');
     style.textContent = `
       .tile {
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
+        border: 1px solid #e8e8ec;
+        border-radius: 16px;
         padding: 12px;
         background: #fff;
-        display: flex;
-        flex-direction: column;
-        min-height: 220px;
+        box-shadow: 0 8px 22px rgba(31, 41, 55, 0.07);
+        display: grid;
+        grid-template-columns: 160px 1fr 180px;
+        gap: 14px;
+        align-items: center;
+      }
+      .media {
+        width: 160px;
+      }
+      .thumb {
+        width: 100%;
+        height: 110px;
+        object-fit: cover;
+        border-radius: 12px;
       }
       .badge-row {
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
-        margin-bottom: 12px;
       }
       .badge {
-        background: #eff6ff;
-        color: #1d4ed8;
         border-radius: 999px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-size: 12px;
+        line-height: 1.2;
       }
-      .badge.featured {
-        background: #fffbeb;
+      .badge.included {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .badge.waitlist {
+        background: #fef3c7;
         color: #92400e;
       }
+      .badge.neutral {
+        background: #f3f4f6;
+        color: #374151;
+      }
+      .badge.price {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .action-panel {
+        text-align: right;
+      }
+      .datetime {
+        margin: 0 0 10px;
+        font-size: 0.85rem;
+        color: #4b5563;
+      }
       .register-btn {
-        margin-top: auto;
         width: 100%;
         border: none;
-        border-radius: 8px;
-        padding: 10px;
-        background: #2563eb;
+        border-radius: 999px;
+        padding: 10px 12px;
+        background: #8b1d2c;
         color: #fff;
-        font-weight: 600;
+        font-weight: 700;
         cursor: pointer;
       }
-      .register-btn.tone-register {
-        background: #2563eb;
-      }
-      .register-btn.tone-registered {
-        background: #059669;
-      }
-      .register-btn.tone-waitlist {
-        background: #d97706;
-      }
+      .register-btn.tone-register,
+      .register-btn.tone-registered,
+      .register-btn.tone-waitlist,
       .register-btn.tone-remove {
-        background: #b91c1c;
+        background: #8b1d2c;
       }
-      .register-btn.tone-included {
-        background: #7c3aed;
-      }
+      .register-btn.tone-included,
       .register-btn.tone-unavailable {
         background: #9ca3af;
       }
@@ -142,9 +196,22 @@ export class SessionTile extends HTMLElement {
         opacity: 0.9;
         cursor: not-allowed;
       }
+      @media (max-width: 760px) {
+        .tile {
+          grid-template-columns: 1fr;
+        }
+        .media {
+          width: 100%;
+        }
+        .thumb {
+          height: 160px;
+        }
+        .action-panel {
+          text-align: left;
+        }
+      }
     `;
 
-    card.append(name, meta, desc, fee, badgeRow, actionButton);
     this.shadowRoot.append(style, card);
   }
 
@@ -165,7 +232,7 @@ export class SessionTile extends HTMLElement {
     const status = this.getStatusCode();
 
     if (status === 'SELECTED') {
-      return { text: 'Registered', disabled: false, tone: 'registered' };
+      return { text: 'Remove', disabled: false, tone: 'remove' };
     }
 
     if (status === 'WAITLISTED') {
@@ -177,7 +244,7 @@ export class SessionTile extends HTMLElement {
     }
 
     if (status === 'OPEN' || status === 'OPEN_FROM_WAITLIST') {
-      return { text: 'Register', disabled: false, tone: 'register' };
+      return { text: 'Add to schedule', disabled: false, tone: 'register' };
     }
 
     if (status === 'INCLUDED' || status === 'BUNDLED') {
@@ -190,7 +257,7 @@ export class SessionTile extends HTMLElement {
   getFeeLabel(session) {
     const status = this.getStatusCode();
     if (status === 'INCLUDED' || status === 'BUNDLED') {
-      return 'Fee: Included';
+      return 'Included';
     }
 
     const amount =
@@ -200,9 +267,9 @@ export class SessionTile extends HTMLElement {
       session.fee?.chargePolicies?.find(policy => policy.isActive)?.amount;
 
     if (amount === undefined || amount === null || Number(amount) === 0) {
-      return 'Fee: Free';
+      return 'Free';
     }
 
-    return `Fee: $${Number(amount).toFixed(2)}`;
+    return `$${Number(amount).toFixed(2)} add-on`;
   }
 }
