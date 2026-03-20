@@ -41,6 +41,8 @@ export default class extends HTMLElement {
   searchQuery = '';
   sessionStatuses = new Map();
   showMobileFilters = false;
+  isLoading = false;
+  loadingMessage = 'Loading sessions and fees...';
 
   constructor({ configuration, theme }) {
     super();
@@ -58,6 +60,7 @@ export default class extends HTMLElement {
     this.root.className = 'widget-root';
     this.shadowRoot.append(this.createStyles(), this.root);
 
+    this.initializeLayout();
     await this.fetchAndRender();
 
     const rerender = async () => {
@@ -74,6 +77,10 @@ export default class extends HTMLElement {
   }
 
   async fetchAndRender() {
+    this.isLoading = true;
+    this.loadingMessage = 'Loading sessions and fees...';
+    this.render();
+
     const generator = await this.cventSdk.getSessionGenerator('nameAsc', this.configuration?.pageSize ?? 50, {
       byRegistrationTypeAndAdmissionItem: true
     });
@@ -87,6 +94,8 @@ export default class extends HTMLElement {
     const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
 
     const feesBySessionId = await this.fetchFeesBySessionId();
+    this.loadingMessage = 'Loading registration statuses...';
+    this.render();
 
     this.sessions = inRangeSessions.map(session => {
       const fee = feesBySessionId.get(session.id);
@@ -102,6 +111,7 @@ export default class extends HTMLElement {
       };
     });
     await this.refreshSessionStatuses();
+    this.isLoading = false;
     this.render();
   }
 
@@ -189,6 +199,10 @@ export default class extends HTMLElement {
   }
 
   render() {
+    if (!this.layoutInitialized) {
+      this.initializeLayout();
+    }
+
     const allSessions = this.sessions || [];
     const categories = this.getUniqueCategories(allSessions);
     if (this.selectedCategoryId && !categories.find(category => category.id === this.selectedCategoryId)) {
@@ -202,14 +216,32 @@ export default class extends HTMLElement {
         : filteredSessions.filter(session => dateKey(session.startDateTime) === this.selectedDate);
 
     const scheduleEntries = this.getScheduleEntries();
+    this.updateCategoryTabs(categories);
+    this.updateFilterToolbar();
+    this.updateMainContent(selectedDaySessions, scheduleEntries);
+  }
 
-    this.root.replaceChildren(
-      this.createPageTitleSection(),
-      this.createCategoryTabs(categories),
-      this.createFilterToolbar(),
-      this.createMainContent(selectedDaySessions, scheduleEntries),
-      this.createRecommendations()
-    );
+  initializeLayout() {
+    if (this.layoutInitialized) {
+      return;
+    }
+
+    this.pageTitleSection = this.createPageTitleSection();
+    this.categoryTabs = document.createElement('div');
+    this.categoryTabs.className = 'category-tabs';
+    this.toolbarWrap = document.createElement('div');
+    this.toolbarWrap.className = 'toolbar-wrap';
+    this.mainLayout = document.createElement('div');
+    this.mainLayout.className = 'main-layout';
+    this.sessionList = document.createElement('div');
+    this.sessionList.className = 'session-list';
+    this.scheduleSidebar = document.createElement('aside');
+    this.scheduleSidebar.className = 'schedule-sidebar';
+    this.mainLayout.append(this.sessionList, this.scheduleSidebar);
+    this.recommendations = this.createRecommendations();
+
+    this.root.append(this.pageTitleSection, this.categoryTabs, this.toolbarWrap, this.mainLayout, this.recommendations);
+    this.layoutInitialized = true;
   }
 
   createPageTitleSection() {
@@ -222,10 +254,9 @@ export default class extends HTMLElement {
     return header;
   }
 
-  createCategoryTabs(categories) {
-    const wrap = document.createElement('div');
-    wrap.className = 'category-tabs';
-
+  updateCategoryTabs(categories) {
+    const wrap = this.categoryTabs;
+    wrap.replaceChildren();
     const allButton = document.createElement('button');
     allButton.className = `category-pill ${!this.selectedCategoryId ? 'active' : ''}`;
     allButton.textContent = 'All Categories';
@@ -246,13 +277,11 @@ export default class extends HTMLElement {
       wrap.appendChild(button);
     });
 
-    return wrap;
   }
 
-  createFilterToolbar() {
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar-wrap';
-
+  updateFilterToolbar() {
+    const toolbar = this.toolbarWrap;
+    toolbar.replaceChildren();
     const compactControls = document.createElement('div');
     compactControls.className = 'compact-controls';
 
@@ -328,7 +357,6 @@ export default class extends HTMLElement {
 
     row.append(dayFilter, typeFilter, sortFilter, searchWrap);
     toolbar.append(compactControls, row);
-    return toolbar;
   }
 
   createSelectControl(labelText, value, options, onChange) {
@@ -352,12 +380,13 @@ export default class extends HTMLElement {
     return label;
   }
 
-  createMainContent(sessions, scheduleEntries) {
-    const layout = document.createElement('div');
-    layout.className = 'main-layout';
+  updateMainContent(sessions, scheduleEntries) {
+    const leftColumn = this.sessionList;
+    leftColumn.replaceChildren();
 
-    const leftColumn = document.createElement('div');
-    leftColumn.className = 'session-list';
+    if (this.isLoading) {
+      leftColumn.appendChild(this.createLoadingState());
+    } else {
     sessions.forEach(session => {
       const tile = new SessionTile(
         session,
@@ -390,15 +419,29 @@ export default class extends HTMLElement {
       empty.textContent = 'No sessions match the selected filters.';
       leftColumn.appendChild(empty);
     }
+    }
 
-    const rightColumn = this.createScheduleSidebar(scheduleEntries);
-    layout.append(leftColumn, rightColumn);
-    return layout;
+    this.updateScheduleSidebar(scheduleEntries);
   }
 
-  createScheduleSidebar(scheduleEntries) {
-    const sidebar = document.createElement('aside');
-    sidebar.className = 'schedule-sidebar';
+  createLoadingState() {
+    const loading = document.createElement('div');
+    loading.className = 'loading-state';
+    loading.innerHTML = `
+      <img
+        class="loading-gif"
+        src="data:image/gif;base64,R0lGODlhEAAQAPIAAP///wAAAMLCwkJCQmZmZv///wAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAEAAQAAADMwi63P4wyklrE2MIOggZnAdOmGYJRbExwroUmrYxWQAAIfkEBQoAAAAsAAAAABAAEAAAAzMIutz+MMpJaxNjCDoIGZwHTphmCUWxMcK6FJq2MVkAACH5BAUKAAAALAAAAAAQABAAAAMzCLrc/jDKSWsTYwg6CBmcB06YZglFsTHCuhSatjFZAAA7"
+        alt="Loading"
+      />
+      <p>${this.loadingMessage}</p>
+      <progress></progress>
+    `;
+    return loading;
+  }
+
+  updateScheduleSidebar(scheduleEntries) {
+    const sidebar = this.scheduleSidebar;
+    sidebar.replaceChildren();
 
     const heading = document.createElement('h3');
     heading.textContent = `My Schedule (${scheduleEntries.length})`;
@@ -466,16 +509,7 @@ export default class extends HTMLElement {
     summary.className = 'schedule-summary';
     const total = scheduleEntries.reduce((sum, entry) => sum + (entry.isIncluded ? 0 : entry.amount), 0);
     summary.innerHTML = `<p>Session add-on total: <strong>$${total.toFixed(2)}</strong></p>`;
-
-    const continueButton = document.createElement('button');
-    continueButton.className = 'continue-btn';
-    continueButton.textContent = 'Continue';
-    continueButton.disabled = !scheduleEntries.length;
-
-    summary.appendChild(continueButton);
     sidebar.appendChild(summary);
-
-    return sidebar;
   }
 
   createRecommendations() {
@@ -764,21 +798,31 @@ export default class extends HTMLElement {
       .schedule-summary p {
         margin: 0 0 10px;
       }
-      .continue-btn {
-        width: 100%;
-        border: none;
-        border-radius: 12px;
-        padding: 10px;
-        background: #8b1d2c;
-        color: #fff;
-        font-weight: 700;
-      }
-      .continue-btn:disabled {
-        background: #d1d5db;
-        color: #6b7280;
-      }
       .empty {
         color: #6b7280;
+      }
+      .loading-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 220px;
+        background: #fff;
+        border: 1px solid #ececec;
+        border-radius: 12px;
+      }
+      .loading-gif {
+        width: 28px;
+        height: 28px;
+      }
+      .loading-state p {
+        margin: 0;
+        color: #4b5563;
+      }
+      .loading-state progress {
+        width: min(280px, 75%);
+        height: 10px;
       }
       .recommendations {
         margin-top: 16px;

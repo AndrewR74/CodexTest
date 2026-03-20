@@ -35,15 +35,6 @@ export class SessionTile extends HTMLElement {
     const card = document.createElement('article');
     card.className = 'tile';
 
-    const media = document.createElement('div');
-    media.className = 'media';
-
-    const image = document.createElement('img');
-    image.className = 'thumb';
-    image.src = s.imageUrl || s.image?.url || 'https://via.placeholder.com/160x110/efe2e2/8b1d2c?text=Session';
-    image.alt = `${s.name} preview`;
-    media.appendChild(image);
-
     const content = document.createElement('div');
     content.className = 'content';
 
@@ -52,7 +43,7 @@ export class SessionTile extends HTMLElement {
     setStylesOnElement({ ...defaultTheme.header3, ...this.theme.header3, margin: '0 0 8px' }, name);
 
     const desc = document.createElement('p');
-    desc.textContent = s.description || 'No description available.';
+    desc.innerHTML = s.description || 'No description available.';
     setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 8px', fontSize: '0.92rem' }, desc);
 
     const location = document.createElement('p');
@@ -113,7 +104,7 @@ export class SessionTile extends HTMLElement {
     };
 
     actionPanel.append(datetime, actionButton);
-    card.append(media, content, actionPanel);
+    card.append(content, actionPanel);
 
     const style = document.createElement('style');
     style.textContent = `
@@ -124,18 +115,9 @@ export class SessionTile extends HTMLElement {
         background: #fff;
         box-shadow: 0 8px 22px rgba(31, 41, 55, 0.07);
         display: grid;
-        grid-template-columns: 160px 1fr 180px;
+        grid-template-columns: 1fr 180px;
         gap: 14px;
         align-items: center;
-      }
-      .media {
-        width: 160px;
-      }
-      .thumb {
-        width: 100%;
-        height: 110px;
-        object-fit: cover;
-        border-radius: 12px;
       }
       .badge-row {
         display: flex;
@@ -199,12 +181,6 @@ export class SessionTile extends HTMLElement {
       @media (max-width: 760px) {
         .tile {
           grid-template-columns: 1fr;
-        }
-        .media {
-          width: 100%;
-        }
-        .thumb {
-          height: 160px;
         }
         .action-panel {
           text-align: left;
