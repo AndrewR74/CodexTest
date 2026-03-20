@@ -16,9 +16,6 @@ class SessionTabsEditor extends HTMLElement {
     this.pageSizeInput.min = '20';
     this.pageSizeInput.step = '10';
 
-    this.uxToggle = document.createElement('input');
-    this.uxToggle.type = 'checkbox';
-
     this.startDateInput = document.createElement('input');
     this.startDateInput.type = 'date';
 
@@ -29,10 +26,6 @@ class SessionTabsEditor extends HTMLElement {
     pageSizeLabel.textContent = 'Page size (session SDK fetch chunk): ';
     pageSizeLabel.appendChild(this.pageSizeInput);
 
-    const uxLabel = document.createElement('label');
-    uxLabel.textContent = ' Show UX recommendations panel';
-    uxLabel.prepend(this.uxToggle);
-
     const startDateLabel = document.createElement('label');
     startDateLabel.textContent = 'Start date (inclusive): ';
     startDateLabel.appendChild(this.startDateInput);
@@ -42,7 +35,6 @@ class SessionTabsEditor extends HTMLElement {
     endDateLabel.appendChild(this.endDateInput);
 
     this.pageSizeInput.onchange = () => this.pushConfig();
-    this.uxToggle.onchange = () => this.pushConfig();
     this.startDateInput.onchange = () => this.pushConfig();
     this.endDateInput.onchange = () => this.pushConfig();
 
@@ -54,10 +46,7 @@ class SessionTabsEditor extends HTMLElement {
       startDateLabel,
       document.createElement('br'),
       document.createElement('br'),
-      endDateLabel,
-      document.createElement('br'),
-      document.createElement('br'),
-      uxLabel
+      endDateLabel
     );
     this.shadowRoot.append(this.container);
 
@@ -67,7 +56,6 @@ class SessionTabsEditor extends HTMLElement {
   onConfigurationUpdate(newConfig) {
     this._config = newConfig || {};
     this.pageSizeInput.value = this._config.pageSize ?? 50;
-    this.uxToggle.checked = this._config.showUxRecommendations ?? true;
     this.startDateInput.value = this._config.startDate ?? '';
     this.endDateInput.value = this._config.endDate ?? '';
   }
@@ -80,7 +68,6 @@ class SessionTabsEditor extends HTMLElement {
     this.setConfig({
       ...this._config,
       pageSize: Number(this.pageSizeInput.value) || 50,
-      showUxRecommendations: !!this.uxToggle.checked,
       startDate: this.startDateInput.value || '',
       endDate: this.endDateInput.value || ''
     });

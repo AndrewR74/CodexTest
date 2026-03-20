@@ -238,9 +238,7 @@ export default class extends HTMLElement {
     this.scheduleSidebar = document.createElement('aside');
     this.scheduleSidebar.className = 'schedule-sidebar';
     this.mainLayout.append(this.sessionList, this.scheduleSidebar);
-    this.recommendations = this.createRecommendations();
-
-    this.root.append(this.pageTitleSection, this.categoryTabs, this.toolbarWrap, this.mainLayout, this.recommendations);
+    this.root.append(this.pageTitleSection, this.categoryTabs, this.toolbarWrap, this.mainLayout);
     this.layoutInitialized = true;
   }
 
@@ -510,26 +508,6 @@ export default class extends HTMLElement {
     const total = scheduleEntries.reduce((sum, entry) => sum + (entry.isIncluded ? 0 : entry.amount), 0);
     summary.innerHTML = `<p>Session add-on total: <strong>$${total.toFixed(2)}</strong></p>`;
     sidebar.appendChild(summary);
-  }
-
-  createRecommendations() {
-    if (!this.configuration?.showUxRecommendations) {
-      return document.createElement('div');
-    }
-
-    const wrap = document.createElement('aside');
-    wrap.className = 'recommendations';
-    wrap.innerHTML = `
-      <h3>UX/UI recommendations for large session catalogs</h3>
-      <ul>
-        <li>Add search with typo tolerance and speaker/location indexing.</li>
-        <li>Add sticky summary chips for active filters and one-click clear.</li>
-        <li>Use progressive loading (infinite scroll or "load more") for 100s of tiles.</li>
-        <li>Offer sort options: start time, popularity, availability, and featured.</li>
-        <li>Add an agenda conflict indicator before registration confirmation.</li>
-      </ul>
-    `;
-    return wrap;
   }
 
   getScheduleEntries() {
