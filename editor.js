@@ -13,6 +13,11 @@ class SessionTabsEditor extends HTMLElement {
     const heading = document.createElement('h2');
     heading.textContent = 'Session Date Tabs Widget Settings';
 
+    this.saveButton = document.createElement('button');
+    this.saveButton.type = 'button';
+    this.saveButton.textContent = 'Save';
+    this.saveButton.onclick = () => this.pushConfig();
+
     this.widgetTitleInput = document.createElement('input');
     this.widgetTitleInput.type = 'text';
     this.widgetTitleInput.placeholder = 'Build Your Weekend Schedule';
@@ -73,19 +78,20 @@ class SessionTabsEditor extends HTMLElement {
       this.pageSizeInput,
       this.startDateInput,
       this.endDateInput,
-      this.categoryFilterInput,
-      this.preventOverlapInput,
-      this.excludedSessionFilterInput
+      this.preventOverlapInput
     ].forEach(input => {
-      input.onchange = () => this.pushConfig();
+      input.onchange = () => this.captureFormState();
     });
 
-    this.widgetTitleInput.oninput = () => this.pushConfig();
+    this.widgetTitleInput.oninput = () => this.captureFormState();
     this.categoryFilterInput.oninput = () => this.renderCategoryOptions();
     this.excludedSessionFilterInput.oninput = () => this.renderExcludedSessionOptions();
 
     this.container.append(
       heading,
+      this.saveButton,
+      document.createElement('br'),
+      document.createElement('br'),
       widgetTitleLabel,
       document.createElement('br'),
       document.createElement('br'),
@@ -193,7 +199,6 @@ class SessionTabsEditor extends HTMLElement {
           selectedCategoryIds.delete(category.id);
         }
         this._config.allowedCategoryIds = [...selectedCategoryIds];
-        this.pushConfig();
       };
       row.append(checkbox, document.createTextNode(` ${category.name}`));
       this.categoryList.appendChild(row);
@@ -239,19 +244,33 @@ class SessionTabsEditor extends HTMLElement {
           selectedSessionIds.delete(session.id);
         }
         this._config.overlapExcludedSessionIds = [...selectedSessionIds];
-        this.pushConfig();
       };
-      row.append(checkbox, document.createTextNode(` ${session.name}`));
+      row.append(checkbox, document.createTextNode(` ${this.getSessionOptionLabel(session)}`));
       this.excludedSessionsList.appendChild(row);
     });
   }
 
-  pushConfig() {
-    if (!this.setConfig) {
-      return;
+  getSessionOptionLabel(session) {
+    const name = session?.name || 'Untitled session';
+    const startDateTime = session?.startDateTime ? new Date(session.startDateTime) : null;
+
+    if (!startDateTime || Number.isNaN(startDateTime.getTime())) {
+      return name;
     }
 
-    this.setConfig({
+    const formattedDateTime = startDateTime.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+
+    return `${name} — ${formattedDateTime}`;
+  }
+
+  captureFormState() {
+    this._config = {
       ...this._config,
       pageSize: Number(this.pageSizeInput.value) || 50,
       widgetTitle: this.widgetTitleInput.value || '',
@@ -260,7 +279,17 @@ class SessionTabsEditor extends HTMLElement {
       preventOverlapRegistration: this.preventOverlapInput.checked,
       allowedCategoryIds: this._config.allowedCategoryIds || [],
       overlapExcludedSessionIds: this._config.overlapExcludedSessionIds || []
-    });
+    };
+    this.renderExcludedSessionOptions();
+  }
+
+  pushConfig() {
+    if (!this.setConfig) {
+      return;
+    }
+
+    this.captureFormState();
+    this.setConfig(this._config);
   }
 }
 
