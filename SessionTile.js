@@ -13,11 +13,11 @@ const setStylesOnElement = (styles, element) => {
 const getTimeRangeLabel = session => {
   const start = new Date(session.startDateTime);
   const end = new Date(session.endDateTime);
+  const day = start.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  const startTime = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const endTime = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  return `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit'
-  })}`;
+  return `${day} · ${startTime} - ${endTime}`;
 };
 
 export class SessionTile extends HTMLElement {
