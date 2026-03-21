@@ -96,10 +96,11 @@ export default class extends HTMLElement {
 
     const { startDate, endDate } = this.resolveEffectiveDateRange(sessions);
     const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
+    const categoryFilteredSessions = this.filterSessionsByConfiguredCategories(inRangeSessions);
 
     const feesBySessionId = await feesBySessionIdPromise;
     this.loadingMessage = 'Loading registration statuses...';
-    this.sessions = inRangeSessions.map(session => {
+    this.sessions = categoryFilteredSessions.map(session => {
       const fee = feesBySessionId.get(session.id);
       if (!fee) {
         return session;
@@ -117,6 +118,16 @@ export default class extends HTMLElement {
     await this.refreshSessionStatuses();
     this.isLoading = false;
     this.render();
+  }
+
+  filterSessionsByConfiguredCategories(sessions) {
+    const configuredCategories = this.configuration?.allowedCategoryIds || [];
+    if (!configuredCategories.length) {
+      return sessions;
+    }
+
+    const allowedIds = new Set(configuredCategories);
+    return sessions.filter(session => allowedIds.has(session.category?.id));
   }
 
   resolveEffectiveDateRange(sessions) {
@@ -249,8 +260,9 @@ export default class extends HTMLElement {
   createPageTitleSection() {
     const header = document.createElement('div');
     header.className = 'page-title-section';
+    const widgetTitle = this.configuration?.widgetTitle || 'Build Your Weekend Schedule';
     header.innerHTML = `
-      <h2>Build Your Weekend Schedule</h2>
+      <h2>${widgetTitle}</h2>
       <p>Browse sessions, refine results, and add your favorites to a live schedule summary.</p>
     `;
     return header;
@@ -403,23 +415,7 @@ export default class extends HTMLElement {
       const tile = new SessionTile(
         session,
         this.theme,
-        async sessionId => {
-          if (this.cventSdk.pickSession) {
-            const pickResult = await this.cventSdk.pickSession(sessionId);
-            if (!pickResult?.success) {
-              return { success: false };
-            }
-
-            const updatedStatus = await this.cventSdk.getSessionStatus(sessionId);
-            this.sessionStatuses.set(sessionId, updatedStatus || null);
-            this.render();
-            return {
-              success: true,
-              status: updatedStatus || null
-            };
-          }
-          return { success: false };
-        },
+        async sessionId => this.handleSessionAction(sessionId),
         this.sessionStatuses.get(session.id)
       );
       leftColumn.appendChild(tile);
@@ -437,6 +433,115 @@ export default class extends HTMLElement {
     }
 
     this.updateScheduleSidebar(scheduleEntries);
+  }
+
+  async handleSessionAction(sessionId) {
+    if (!this.cventSdk.pickSession) {
+      return { success: false };
+    }
+
+    const session = (this.sessions || []).find(item => item.id === sessionId);
+    const currentStatus = this.getStatusCodeForSession(sessionId);
+    const isRegisterAction = ['OPEN', 'OPEN_FROM_WAITLIST', 'WAITLIST_AVAILABLE'].includes(currentStatus);
+
+    if (isRegisterAction && this.configuration?.preventOverlapRegistration && session) {
+      const conflict = this.findOverlappingSelectedSession(session);
+      if (conflict) {
+        const shouldSwap = await this.showConflictModal(conflict, session);
+        if (!shouldSwap) {
+          return { success: false };
+        }
+
+        await this.cventSdk.pickSession(conflict.id);
+        const updatedConflictStatus = await this.cventSdk.getSessionStatus(conflict.id);
+        this.sessionStatuses.set(conflict.id, updatedConflictStatus || null);
+      }
+    }
+
+    const pickResult = await this.cventSdk.pickSession(sessionId);
+    if (!pickResult?.success) {
+      return { success: false };
+    }
+
+    const updatedStatus = await this.cventSdk.getSessionStatus(sessionId);
+    this.sessionStatuses.set(sessionId, updatedStatus || null);
+    this.render();
+    return {
+      success: true,
+      status: updatedStatus || null
+    };
+  }
+
+  findOverlappingSelectedSession(targetSession) {
+    const excludedIds = new Set(this.configuration?.overlapExcludedSessionIds || []);
+    if (excludedIds.has(targetSession.id)) {
+      return null;
+    }
+
+    const selectedSessions = (this.sessions || []).filter(session => {
+      const status = this.getStatusCodeForSession(session.id);
+      return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(status);
+    });
+
+    return (
+      selectedSessions.find(session => {
+        if (session.id === targetSession.id || excludedIds.has(session.id)) {
+          return false;
+        }
+        return this.sessionsOverlap(session, targetSession);
+      }) || null
+    );
+  }
+
+  sessionsOverlap(sessionA, sessionB) {
+    const aStart = new Date(sessionA.startDateTime).getTime();
+    const aEnd = new Date(sessionA.endDateTime).getTime();
+    const bStart = new Date(sessionB.startDateTime).getTime();
+    const bEnd = new Date(sessionB.endDateTime).getTime();
+
+    return aStart < bEnd && bStart < aEnd;
+  }
+
+  showConflictModal(conflictingSession, selectedSession) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'conflict-modal-overlay';
+
+      const modal = document.createElement('div');
+      modal.className = 'conflict-modal';
+      modal.innerHTML = `
+        <h3>Session Conflict</h3>
+        <p>
+          You are already registered for <strong>${conflictingSession.name}</strong>, which overlaps with
+          <strong>${selectedSession.name}</strong>.
+        </p>
+        <p>Do you want to unregister from the conflicting session and register for this one?</p>
+      `;
+
+      const buttonRow = document.createElement('div');
+      buttonRow.className = 'conflict-modal-actions';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'modal-btn neutral';
+      cancelBtn.textContent = 'Keep current registration';
+      cancelBtn.onclick = () => {
+        overlay.remove();
+        resolve(false);
+      };
+
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'modal-btn primary';
+      confirmBtn.textContent = 'Switch sessions';
+      confirmBtn.onclick = () => {
+        overlay.remove();
+        resolve(true);
+      };
+
+      buttonRow.append(cancelBtn, confirmBtn);
+      modal.appendChild(buttonRow);
+      overlay.appendChild(modal);
+      this.shadowRoot.appendChild(overlay);
+    });
   }
 
   createLoadingState() {
@@ -818,6 +923,49 @@ export default class extends HTMLElement {
       .loading-state progress {
         width: min(280px, 75%);
         height: 10px;
+      }
+      .conflict-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+      .conflict-modal {
+        width: min(460px, calc(100% - 24px));
+        border-radius: 14px;
+        background: #fff;
+        padding: 18px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.22);
+      }
+      .conflict-modal h3 {
+        margin: 0 0 10px;
+      }
+      .conflict-modal p {
+        margin: 0 0 10px;
+      }
+      .conflict-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .modal-btn {
+        border: none;
+        border-radius: 999px;
+        padding: 9px 14px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .modal-btn.neutral {
+        background: #e5e7eb;
+        color: #374151;
+      }
+      .modal-btn.primary {
+        background: #8b1d2c;
+        color: #fff;
       }
       .recommendations {
         margin-top: 16px;
