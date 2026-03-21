@@ -283,6 +283,11 @@ export default class extends HTMLElement {
 
   updateFilterToolbar() {
     const toolbar = this.toolbarWrap;
+    const activeElement = this.shadowRoot.activeElement;
+    const preserveSearchFocus = activeElement?.classList?.contains('search-input');
+    const preservedCursorStart = preserveSearchFocus ? activeElement.selectionStart : null;
+    const preservedCursorEnd = preserveSearchFocus ? activeElement.selectionEnd : null;
+
     toolbar.replaceChildren();
     const compactControls = document.createElement('div');
     compactControls.className = 'compact-controls';
@@ -348,6 +353,7 @@ export default class extends HTMLElement {
     const searchWrap = document.createElement('label');
     searchWrap.className = 'search-wrap';
     const searchInput = document.createElement('input');
+    searchInput.className = 'search-input';
     searchInput.type = 'search';
     searchInput.placeholder = 'Search sessions';
     searchInput.value = this.searchQuery;
@@ -359,6 +365,13 @@ export default class extends HTMLElement {
 
     row.append(dayFilter, typeFilter, sortFilter, searchWrap);
     toolbar.append(compactControls, row);
+
+    if (preserveSearchFocus) {
+      searchInput.focus();
+      const cursorStart = preservedCursorStart ?? searchInput.value.length;
+      const cursorEnd = preservedCursorEnd ?? searchInput.value.length;
+      searchInput.setSelectionRange(cursorStart, cursorEnd);
+    }
   }
 
   createSelectControl(labelText, value, options, onChange) {
