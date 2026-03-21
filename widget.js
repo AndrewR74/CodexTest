@@ -283,6 +283,9 @@ export default class extends HTMLElement {
 
   updateFilterToolbar() {
     const toolbar = this.toolbarWrap;
+    const shouldKeepSearchFocus = this.shadowRoot.activeElement?.classList?.contains('search-input');
+    const previousSelectionStart = shouldKeepSearchFocus ? this.shadowRoot.activeElement.selectionStart : null;
+    const previousSelectionEnd = shouldKeepSearchFocus ? this.shadowRoot.activeElement.selectionEnd : null;
     toolbar.replaceChildren();
     const compactControls = document.createElement('div');
     compactControls.className = 'compact-controls';
@@ -315,21 +318,14 @@ export default class extends HTMLElement {
       this.render();
     });
 
-    const typeFilter = this.createSelectControl(
-      'Session type',
-      this.selectedType,
-      [
-        ['ALL', 'All'],
-        ['SHOW', 'Show'],
-        ['WORKSHOP', 'Workshop'],
-        ['DINING', 'Dining'],
-        ['SPECIAL', 'Special']
-      ],
-      value => {
-        this.selectedType = value;
-        this.render();
-      }
-    );
+    const typeOptions = this.getSessionTypeOptions();
+    if (this.selectedType !== 'ALL' && !typeOptions.find(([value]) => value === this.selectedType)) {
+      this.selectedType = 'ALL';
+    }
+    const typeFilter = this.createSelectControl('Session type', this.selectedType, typeOptions, value => {
+      this.selectedType = value;
+      this.render();
+    });
 
     const sortFilter = this.createSelectControl(
       'Sort',
@@ -348,17 +344,25 @@ export default class extends HTMLElement {
     const searchWrap = document.createElement('label');
     searchWrap.className = 'search-wrap';
     const searchInput = document.createElement('input');
+    searchInput.className = 'search-input';
     searchInput.type = 'search';
     searchInput.placeholder = 'Search sessions';
     searchInput.value = this.searchQuery;
     searchInput.oninput = () => {
       this.searchQuery = searchInput.value;
-      this.render();
+      this.renderSessionResults();
     };
     searchWrap.append(searchInput);
 
     row.append(dayFilter, typeFilter, sortFilter, searchWrap);
     toolbar.append(compactControls, row);
+
+    if (shouldKeepSearchFocus) {
+      searchInput.focus();
+      if (typeof previousSelectionStart === 'number' && typeof previousSelectionEnd === 'number') {
+        searchInput.setSelectionRange(previousSelectionStart, previousSelectionEnd);
+      }
+    }
   }
 
   createSelectControl(labelText, value, options, onChange) {
@@ -544,7 +548,11 @@ export default class extends HTMLElement {
 
   getSessionTimeLabel(session) {
     const start = new Date(session.startDateTime);
-    return start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const end = new Date(session.endDateTime);
+    return `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    })}`;
   }
 
   resolveSessionAmount(session) {
@@ -562,6 +570,27 @@ export default class extends HTMLElement {
   getDayFilterOptions() {
     const days = [...new Set((this.sessions || []).map(session => dateKey(session.startDateTime)).filter(Boolean))].sort();
     return [['ALL', 'All days'], ...days.map(day => [day, prettyDate(day)])];
+  }
+
+  getSessionTypeOptions() {
+    const sessionsInSelectedDate =
+      this.selectedDate === 'ALL'
+        ? this.sessions || []
+        : (this.sessions || []).filter(session => dateKey(session.startDateTime) === this.selectedDate);
+    const typeValues = [...new Set(sessionsInSelectedDate.map(session => (session.type || '').toUpperCase()).filter(Boolean))];
+    const labelForType = type => type.charAt(0) + type.slice(1).toLowerCase();
+    const sortedOptions = typeValues.sort().map(type => [type, labelForType(type)]);
+    return [['ALL', 'All'], ...sortedOptions];
+  }
+
+  renderSessionResults() {
+    const filteredSessions = this.getFilteredAndSortedSessions(this.sessions || []);
+    const selectedDaySessions =
+      this.selectedDate === 'ALL'
+        ? filteredSessions
+        : filteredSessions.filter(session => dateKey(session.startDateTime) === this.selectedDate);
+    const scheduleEntries = this.getScheduleEntries();
+    this.updateMainContent(selectedDaySessions, scheduleEntries);
   }
 
   getFilteredAndSortedSessions(sessions) {
@@ -710,7 +739,7 @@ export default class extends HTMLElement {
       }
       .schedule-sidebar {
         position: sticky;
-        top: 12px;
+        top: 170px;
         background: #fff;
         border: 1px solid #ececec;
         border-radius: 16px;
