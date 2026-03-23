@@ -171,6 +171,7 @@ export class SessionTile extends HTMLElement {
         background: #8b1d2c;
       }
       .register-btn.tone-included,
+      .register-btn.tone-loading,
       .register-btn.tone-unavailable {
         background: #9ca3af;
       }
@@ -205,6 +206,10 @@ export class SessionTile extends HTMLElement {
   }
 
   getActionButtonState() {
+    if (this.selectionStatus === undefined) {
+      return { text: 'Loading status...', disabled: true, tone: 'loading' };
+    }
+
     const status = this.getStatusCode();
 
     if (status === 'SELECTED') {
