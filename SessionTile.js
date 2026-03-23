@@ -53,17 +53,9 @@ export class SessionTile extends HTMLElement {
     const badgeRow = document.createElement('div');
     badgeRow.className = 'badge-row';
 
-    const statusBadge = document.createElement('span');
-    const statusCode = this.getStatusCode();
-    if (statusCode === 'WAITLISTED' || statusCode === 'WAITLIST_AVAILABLE') {
-      statusBadge.className = 'badge waitlist';
-      statusBadge.textContent = 'Waitlist';
-      badgeRow.appendChild(statusBadge);
-    } else if (statusCode === 'INCLUDED' || statusCode === 'BUNDLED') {
-      statusBadge.className = 'badge included';
-      statusBadge.textContent = 'Included';
-      badgeRow.appendChild(statusBadge);
-    }
+    this.statusBadge = document.createElement('span');
+    this.statusBadge.hidden = true;
+    badgeRow.appendChild(this.statusBadge);
 
     if (s.category?.name) {
       const typeBadge = document.createElement('span');
@@ -72,10 +64,10 @@ export class SessionTile extends HTMLElement {
       badgeRow.appendChild(typeBadge);
     }
 
-    const priceBadge = document.createElement('span');
-    priceBadge.className = 'badge price';
-    priceBadge.textContent = this.getFeeLabel(s);
-    badgeRow.appendChild(priceBadge);
+    this.priceBadge = document.createElement('span');
+    this.priceBadge.className = 'badge price';
+    this.priceBadge.textContent = this.getFeeLabel(s);
+    badgeRow.appendChild(this.priceBadge);
 
     content.append(name, desc, location, badgeRow);
 
@@ -86,24 +78,23 @@ export class SessionTile extends HTMLElement {
     datetime.className = 'datetime';
     datetime.textContent = getTimeRangeLabel(s);
 
-    const actionButton = document.createElement('button');
-    actionButton.className = 'register-btn';
-    this.updateActionButton(actionButton, this.getActionButtonState());
-    actionButton.onclick = async () => {
-      actionButton.disabled = true;
-      actionButton.textContent = 'Processing...';
+    this.actionButton = document.createElement('button');
+    this.actionButton.className = 'register-btn';
+    this.updateActionButton(this.actionButton, this.getActionButtonState());
+    this.actionButton.onclick = async () => {
+      this.actionButton.disabled = true;
+      this.actionButton.textContent = 'Processing...';
 
       const result = await this.onRegisterClick?.(s.id);
       if (!result?.success) {
-        this.updateActionButton(actionButton, this.getActionButtonState());
+        this.updateActionButton(this.actionButton, this.getActionButtonState());
         return;
       }
 
-      this.selectionStatus = result.status || this.selectionStatus;
-      this.updateActionButton(actionButton, this.getActionButtonState());
+      this.updateSelectionStatus(result.status || this.selectionStatus);
     };
 
-    actionPanel.append(datetime, actionButton);
+    actionPanel.append(datetime, this.actionButton);
     card.append(content, actionPanel);
 
     const style = document.createElement('style');
@@ -190,6 +181,7 @@ export class SessionTile extends HTMLElement {
     `;
 
     this.shadowRoot.append(style, card);
+    this.refreshStatusPresentation();
   }
 
   getStatusCode() {
@@ -203,6 +195,36 @@ export class SessionTile extends HTMLElement {
     button.textContent = actionState.text;
     button.disabled = actionState.disabled;
     button.className = `register-btn tone-${actionState.tone}`;
+  }
+
+  updateSelectionStatus(selectionStatus) {
+    this.selectionStatus = selectionStatus;
+    this.refreshStatusPresentation();
+  }
+
+  refreshStatusPresentation() {
+    if (this.actionButton) {
+      this.updateActionButton(this.actionButton, this.getActionButtonState());
+    }
+
+    if (!this.statusBadge || !this.priceBadge) {
+      return;
+    }
+
+    const statusCode = this.getStatusCode();
+    this.statusBadge.hidden = true;
+
+    if (statusCode === 'WAITLISTED' || statusCode === 'WAITLIST_AVAILABLE') {
+      this.statusBadge.hidden = false;
+      this.statusBadge.className = 'badge waitlist';
+      this.statusBadge.textContent = 'Waitlist';
+    } else if (statusCode === 'INCLUDED' || statusCode === 'BUNDLED') {
+      this.statusBadge.hidden = false;
+      this.statusBadge.className = 'badge included';
+      this.statusBadge.textContent = 'Included';
+    }
+
+    this.priceBadge.textContent = this.getFeeLabel(this.session);
   }
 
   getActionButtonState() {

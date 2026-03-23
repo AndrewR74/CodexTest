@@ -45,6 +45,7 @@ export default class extends HTMLElement {
   loadingMessage = 'Loading sessions and fees...';
   statusLoadVersion = 0;
   statusFetchDelayMs = 50;
+  sessionTilesById = new Map();
 
   constructor({ configuration, theme }) {
     super();
@@ -235,7 +236,7 @@ export default class extends HTMLElement {
       if (this.statusLoadVersion !== loadVersion) {
         return;
       }
-      this.render();
+      this.updateSessionTileStatus(session.id);
 
       if (delayMs > 0) {
         await sleep(delayMs);
@@ -467,6 +468,7 @@ export default class extends HTMLElement {
   updateMainContent(sessions, scheduleEntries) {
     const leftColumn = this.sessionList;
     leftColumn.replaceChildren();
+    this.sessionTilesById = new Map();
 
     sessions.forEach(session => {
       const tile = new SessionTile(
@@ -475,6 +477,7 @@ export default class extends HTMLElement {
         async sessionId => this.handleSessionAction(sessionId),
         this.sessionStatuses.get(session.id)
       );
+      this.sessionTilesById.set(session.id, tile);
       leftColumn.appendChild(tile);
     });
 
@@ -492,6 +495,14 @@ export default class extends HTMLElement {
     if (!this.configuration?.hideMyScheduleBox) {
       this.updateScheduleSidebar(scheduleEntries);
     }
+  }
+
+  updateSessionTileStatus(sessionId) {
+    const tile = this.sessionTilesById.get(sessionId);
+    if (!tile) {
+      return;
+    }
+    tile.updateSelectionStatus(this.sessionStatuses.get(sessionId));
   }
 
   async handleSessionAction(sessionId) {
