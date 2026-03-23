@@ -79,6 +79,7 @@ export default class extends HTMLElement {
   async fetchAndRender() {
     this.isLoading = true;
     this.loadingMessage = 'Loading sessions and fees...';
+    this.allSessions = [];
     this.sessions = [];
     this.sessionStatuses = new Map();
     this.render();
@@ -95,24 +96,23 @@ export default class extends HTMLElement {
     }
 
     const { startDate, endDate } = this.resolveEffectiveDateRange(sessions);
-    const inRangeSessions = sessions.filter(session => this.isSessionInConfiguredRange(session, startDate, endDate));
-    const categoryFilteredSessions = this.filterSessionsByConfiguredCategories(inRangeSessions);
+    const sessionsWithDateFilter = sessions.map(session => ({
+      session,
+      inConfiguredRange: this.isSessionInConfiguredRange(session, startDate, endDate)
+    }));
 
     const feesBySessionId = await feesBySessionIdPromise;
     this.loadingMessage = 'Loading registration statuses...';
-    this.sessions = categoryFilteredSessions.map(session => {
+    this.allSessions = sessionsWithDateFilter.map(({ session, inConfiguredRange }) => {
       const fee = feesBySessionId.get(session.id);
-      if (!fee) {
-        return session;
-      }
-
-      const chargePolicyAmount = getApplicableFeeAmount(fee);
       return {
         ...session,
+        inConfiguredRange,
         fee,
-        feeAmount: chargePolicyAmount ?? fee.amount
+        feeAmount: fee ? getApplicableFeeAmount(fee) ?? fee.amount : session.feeAmount
       };
     });
+    this.sessions = this.getConfiguredSessions(this.allSessions);
 
     this.render();
     await this.refreshSessionStatuses();
@@ -128,6 +128,11 @@ export default class extends HTMLElement {
 
     const allowedIds = new Set(configuredCategories);
     return sessions.filter(session => allowedIds.has(session.category?.id));
+  }
+
+  getConfiguredSessions(sessions) {
+    const inDateRange = (sessions || []).filter(session => session.inConfiguredRange !== false);
+    return this.filterSessionsByConfiguredCategories(inDateRange);
   }
 
   resolveEffectiveDateRange(sessions) {
@@ -200,7 +205,7 @@ export default class extends HTMLElement {
 
   async refreshSessionStatuses() {
     const statusEntries = await Promise.all(
-      (this.sessions || []).map(async session => {
+      (this.allSessions || []).map(async session => {
         try {
           const status = await this.cventSdk.getSessionStatus(session.id);
           return [session.id, status || null];
@@ -431,7 +436,7 @@ export default class extends HTMLElement {
       return { success: false };
     }
 
-    const session = (this.sessions || []).find(item => item.id === sessionId);
+    const session = (this.allSessions || []).find(item => item.id === sessionId);
     const currentStatus = this.getStatusCodeForSession(sessionId);
     const isRegisterAction = ['OPEN', 'OPEN_FROM_WAITLIST', 'WAITLIST_AVAILABLE'].includes(currentStatus);
 
@@ -469,7 +474,7 @@ export default class extends HTMLElement {
       return null;
     }
 
-    const selectedSessions = (this.sessions || []).filter(session => {
+    const selectedSessions = (this.allSessions || []).filter(session => {
       const status = this.getStatusCodeForSession(session.id);
       return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(status);
     });
@@ -624,7 +629,7 @@ export default class extends HTMLElement {
   }
 
   getScheduleEntries() {
-    return (this.sessions || [])
+    return (this.allSessions || [])
       .filter(session => {
         const code = this.getStatusCodeForSession(session.id);
         return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(code);
