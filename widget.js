@@ -46,6 +46,10 @@ export default class extends HTMLElement {
   statusLoadVersion = 0;
   statusFetchDelayMs = 50;
   sessionTilesById = new Map();
+  statusFetchQueue = [];
+  pendingStatusSessionIds = new Set();
+  isProcessingStatusQueue = false;
+  statusObserver = null;
 
   constructor({ configuration, theme }) {
     super();
@@ -80,6 +84,7 @@ export default class extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.disconnectStatusObserver();
     this.unsubCallbacks.forEach(unsub => unsub?.());
   }
 
@@ -121,13 +126,8 @@ export default class extends HTMLElement {
       };
     });
     this.sessions = this.getConfiguredSessions(this.allSessions);
-
-    this.render();
-    const statusSessions = this.configuration?.hideMyScheduleBox ? this.sessions : this.allSessions;
-    await this.fetchSessionStatusesSequentially(statusSessions, { loadVersion, delayMs: this.statusFetchDelayMs });
-    if (this.statusLoadVersion !== loadVersion) {
-      return;
-    }
+    this.statusFetchQueue = [];
+    this.pendingStatusSessionIds = new Set();
     this.isLoading = false;
     this.render();
   }
@@ -220,28 +220,8 @@ export default class extends HTMLElement {
 
   async fetchSessionStatusesSequentially(sessions, { loadVersion, delayMs = 0 } = {}) {
     const sortedSessions = this.sortSessionsByStartDateAsc(sessions || []);
-
-    for (const session of sortedSessions) {
-      if (this.statusLoadVersion !== loadVersion) {
-        return;
-      }
-
-      try {
-        const status = await this.cventSdk.getSessionStatus(session.id);
-        this.sessionStatuses.set(session.id, status || null);
-      } catch (error) {
-        this.sessionStatuses.set(session.id, null);
-      }
-
-      if (this.statusLoadVersion !== loadVersion) {
-        return;
-      }
-      this.updateSessionTileStatus(session.id);
-
-      if (delayMs > 0) {
-        await sleep(delayMs);
-      }
-    }
+    sortedSessions.forEach(session => this.queueStatusFetch(session.id));
+    await this.processQueuedStatusFetches({ loadVersion, delayMs });
   }
 
   sortSessionsByStartDateAsc(sessions) {
@@ -264,11 +244,11 @@ export default class extends HTMLElement {
     this.isLoading = true;
     this.loadingMessage = 'Loading registration statuses...';
     this.sessionStatuses = new Map();
+    this.statusFetchQueue = [];
+    this.pendingStatusSessionIds = new Set();
     this.render();
-    await this.fetchSessionStatusesSequentially(this.sessions || [], {
-      loadVersion,
-      delayMs: this.statusFetchDelayMs
-    });
+    this.enqueueVisibleSessionStatusFetches();
+    await this.processQueuedStatusFetches({ loadVersion, delayMs: this.statusFetchDelayMs });
     if (this.statusLoadVersion !== loadVersion) {
       return;
     }
@@ -469,6 +449,7 @@ export default class extends HTMLElement {
     const leftColumn = this.sessionList;
     leftColumn.replaceChildren();
     this.sessionTilesById = new Map();
+    this.ensureStatusObserver();
 
     sessions.forEach(session => {
       const tile = new SessionTile(
@@ -477,8 +458,10 @@ export default class extends HTMLElement {
         async sessionId => this.handleSessionAction(sessionId),
         this.sessionStatuses.get(session.id)
       );
+      tile.dataset.sessionId = session.id;
       this.sessionTilesById.set(session.id, tile);
       leftColumn.appendChild(tile);
+      this.statusObserver?.observe(tile);
     });
 
     if (!sessions.length && !this.isLoading) {
@@ -503,6 +486,9 @@ export default class extends HTMLElement {
       return;
     }
     tile.updateSelectionStatus(this.sessionStatuses.get(sessionId));
+    if (!this.configuration?.hideMyScheduleBox && this.scheduleSidebar) {
+      this.updateScheduleSidebar(this.getScheduleEntries());
+    }
   }
 
   async handleSessionAction(sessionId) {
@@ -1102,6 +1088,94 @@ export default class extends HTMLElement {
       }
     `;
     return style;
+  }
+
+  ensureStatusObserver() {
+    if (this.statusObserver) {
+      this.statusObserver.disconnect();
+    }
+
+    this.statusObserver = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) {
+            return;
+          }
+
+          const sessionId = entry.target?.dataset?.sessionId;
+          if (!sessionId) {
+            return;
+          }
+
+          this.statusObserver?.unobserve(entry.target);
+          this.queueStatusFetch(sessionId);
+        });
+        this.processQueuedStatusFetches({ loadVersion: this.statusLoadVersion, delayMs: this.statusFetchDelayMs });
+      },
+      { root: null, threshold: 0.1, rootMargin: '120px 0px' }
+    );
+  }
+
+  disconnectStatusObserver() {
+    if (this.statusObserver) {
+      this.statusObserver.disconnect();
+      this.statusObserver = null;
+    }
+  }
+
+  enqueueVisibleSessionStatusFetches() {
+    this.sessionTilesById.forEach((tile, sessionId) => {
+      const rect = tile.getBoundingClientRect();
+      const isVisible = rect.bottom >= 0 && rect.top <= window.innerHeight;
+      if (isVisible) {
+        this.queueStatusFetch(sessionId);
+      }
+    });
+  }
+
+  queueStatusFetch(sessionId) {
+    if (!sessionId || this.sessionStatuses.has(sessionId) || this.pendingStatusSessionIds.has(sessionId)) {
+      return;
+    }
+
+    this.pendingStatusSessionIds.add(sessionId);
+    this.statusFetchQueue.push(sessionId);
+  }
+
+  async processQueuedStatusFetches({ loadVersion, delayMs = 0 } = {}) {
+    if (this.isProcessingStatusQueue) {
+      return;
+    }
+
+    this.isProcessingStatusQueue = true;
+    try {
+      while (this.statusFetchQueue.length) {
+        if (this.statusLoadVersion !== loadVersion) {
+          return;
+        }
+
+        const sessionId = this.statusFetchQueue.shift();
+        this.pendingStatusSessionIds.delete(sessionId);
+
+        try {
+          const status = await this.cventSdk.getSessionStatus(sessionId);
+          this.sessionStatuses.set(sessionId, status || null);
+        } catch (error) {
+          this.sessionStatuses.set(sessionId, null);
+        }
+
+        if (this.statusLoadVersion !== loadVersion) {
+          return;
+        }
+
+        this.updateSessionTileStatus(sessionId);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+    } finally {
+      this.isProcessingStatusQueue = false;
+    }
   }
 }
 
