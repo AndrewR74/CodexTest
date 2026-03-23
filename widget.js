@@ -42,9 +42,9 @@ export default class extends HTMLElement {
   sessionStatuses = new Map();
   showMobileFilters = false;
   isLoading = false;
-  isLoadingLowPriorityStatuses = false;
   loadingMessage = 'Loading sessions and fees...';
   statusLoadVersion = 0;
+  statusFetchDelayMs = 50;
 
   constructor({ configuration, theme }) {
     super();
@@ -66,6 +66,10 @@ export default class extends HTMLElement {
     await this.fetchAndRender();
 
     const rerender = async () => {
+      if (this.configuration?.hideMyScheduleBox) {
+        await this.refreshVisibleSessionStatusesOnly();
+        return;
+      }
       await this.fetchAndRender();
     };
 
@@ -81,7 +85,6 @@ export default class extends HTMLElement {
   async fetchAndRender() {
     const loadVersion = ++this.statusLoadVersion;
     this.isLoading = true;
-    this.isLoadingLowPriorityStatuses = false;
     this.loadingMessage = 'Loading sessions and fees...';
     this.allSessions = [];
     this.sessions = [];
@@ -119,13 +122,13 @@ export default class extends HTMLElement {
     this.sessions = this.getConfiguredSessions(this.allSessions);
 
     this.render();
-    await this.refreshPrioritySessionStatuses(loadVersion);
+    const statusSessions = this.configuration?.hideMyScheduleBox ? this.sessions : this.allSessions;
+    await this.fetchSessionStatusesSequentially(statusSessions, { loadVersion, delayMs: this.statusFetchDelayMs });
     if (this.statusLoadVersion !== loadVersion) {
       return;
     }
     this.isLoading = false;
     this.render();
-    this.loadRemainingSessionStatuses(loadVersion);
   }
 
   filterSessionsByConfiguredCategories(sessions) {
@@ -214,44 +217,6 @@ export default class extends HTMLElement {
     return feesBySessionId;
   }
 
-  getPrioritizedSessions() {
-    const configuredIds = new Set((this.sessions || []).map(session => session.id));
-    const overlapExcludedIds = new Set(this.configuration?.overlapExcludedSessionIds || []);
-    const highPriority = [];
-    const lowPriority = [];
-
-    (this.allSessions || []).forEach(session => {
-      if (configuredIds.has(session.id) || overlapExcludedIds.has(session.id)) {
-        highPriority.push(session);
-      } else {
-        lowPriority.push(session);
-      }
-    });
-
-    return { highPriority, lowPriority };
-  }
-
-  async refreshPrioritySessionStatuses(loadVersion) {
-    const { highPriority } = this.getPrioritizedSessions();
-    await this.fetchSessionStatusesSequentially(highPriority, { loadVersion });
-  }
-
-  async loadRemainingSessionStatuses(loadVersion) {
-    const { lowPriority } = this.getPrioritizedSessions();
-    if (!lowPriority.length || this.statusLoadVersion !== loadVersion) {
-      return;
-    }
-
-    this.isLoadingLowPriorityStatuses = true;
-    this.render();
-    await this.fetchSessionStatusesSequentially(lowPriority, { loadVersion, delayMs: 100 });
-    if (this.statusLoadVersion !== loadVersion) {
-      return;
-    }
-    this.isLoadingLowPriorityStatuses = false;
-    this.render();
-  }
-
   async fetchSessionStatusesSequentially(sessions, { loadVersion, delayMs = 0 } = {}) {
     for (const session of sessions || []) {
       if (this.statusLoadVersion !== loadVersion) {
@@ -269,6 +234,23 @@ export default class extends HTMLElement {
         await sleep(delayMs);
       }
     }
+  }
+
+  async refreshVisibleSessionStatusesOnly() {
+    const loadVersion = ++this.statusLoadVersion;
+    this.isLoading = true;
+    this.loadingMessage = 'Loading registration statuses...';
+    this.sessionStatuses = new Map();
+    this.render();
+    await this.fetchSessionStatusesSequentially(this.sessions || [], {
+      loadVersion,
+      delayMs: this.statusFetchDelayMs
+    });
+    if (this.statusLoadVersion !== loadVersion) {
+      return;
+    }
+    this.isLoading = false;
+    this.render();
   }
 
   render() {
@@ -289,6 +271,7 @@ export default class extends HTMLElement {
         : filteredSessions.filter(session => dateKey(session.startDateTime) === this.selectedDate);
 
     const scheduleEntries = this.getScheduleEntries();
+    this.mainLayout.classList.toggle('single-column', Boolean(this.configuration?.hideMyScheduleBox));
     this.updateCategoryTabs(categories);
     this.updateFilterToolbar();
     this.updateMainContent(selectedDaySessions, scheduleEntries);
@@ -310,7 +293,10 @@ export default class extends HTMLElement {
     this.sessionList.className = 'session-list';
     this.scheduleSidebar = document.createElement('aside');
     this.scheduleSidebar.className = 'schedule-sidebar';
-    this.mainLayout.append(this.sessionList, this.scheduleSidebar);
+    this.mainLayout.appendChild(this.sessionList);
+    if (!this.configuration?.hideMyScheduleBox) {
+      this.mainLayout.appendChild(this.scheduleSidebar);
+    }
     this.root.append(this.pageTitleSection, this.categoryTabs, this.toolbarWrap, this.mainLayout);
     this.layoutInitialized = true;
   }
@@ -481,7 +467,9 @@ export default class extends HTMLElement {
       leftColumn.appendChild(this.createLoadingState());
     }
 
-    this.updateScheduleSidebar(scheduleEntries);
+    if (!this.configuration?.hideMyScheduleBox) {
+      this.updateScheduleSidebar(scheduleEntries);
+    }
   }
 
   async handleSessionAction(sessionId) {
@@ -616,10 +604,6 @@ export default class extends HTMLElement {
     heading.textContent = `My Schedule (${scheduleEntries.length})`;
     sidebar.appendChild(heading);
 
-    if (this.isLoadingLowPriorityStatuses) {
-      sidebar.appendChild(this.createScheduleLoadingState());
-    }
-
     if (!scheduleEntries.length) {
       const empty = document.createElement('p');
       empty.className = 'schedule-empty';
@@ -683,20 +667,6 @@ export default class extends HTMLElement {
     const total = scheduleEntries.reduce((sum, entry) => sum + (entry.isIncluded ? 0 : entry.amount), 0);
     summary.innerHTML = `<p>Session add-on total: <strong>$${total.toFixed(2)}</strong></p>`;
     sidebar.appendChild(summary);
-  }
-
-  createScheduleLoadingState() {
-    const loading = document.createElement('div');
-    loading.className = 'schedule-loading';
-    loading.innerHTML = `
-      <img
-        class="loading-gif"
-        src="data:image/gif;base64,R0lGODlhEAAQAPIAAP///wAAAMLCwkJCQmZmZv///wAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAEAAQAAADMwi63P4wyklrE2MIOggZnAdOmGYJRbExwroUmrYxWQAAIfkEBQoAAAAsAAAAABAAEAAAAzMIutz+MMpJaxNjCDoIGZwHTphmCUWxMcK6FJq2MVkAACH5BAUKAAAALAAAAAAQABAAAAMzCLrc/jDKSWsTYwg6CBmcB06YZglFsTHCuhSatjFZAAA7"
-        alt="Loading"
-      />
-      <p>Updating remaining session statuses…</p>
-    `;
-    return loading;
   }
 
   getScheduleEntries() {
@@ -914,6 +884,9 @@ export default class extends HTMLElement {
         gap: 16px;
         align-items: start;
       }
+      .main-layout.single-column {
+        grid-template-columns: minmax(0, 1fr);
+      }
       .session-list {
         display: grid;
         gap: 12px;
@@ -933,20 +906,6 @@ export default class extends HTMLElement {
       .schedule-empty {
         margin: 0;
         color: #6b7280;
-      }
-      .schedule-loading {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin: 0 0 10px;
-        padding: 8px 10px;
-        border-radius: 10px;
-        background: #f8fafc;
-        color: #4b5563;
-        font-size: 0.85rem;
-      }
-      .schedule-loading p {
-        margin: 0;
       }
       .schedule-day {
         border-top: 1px solid #f1f5f9;
