@@ -218,7 +218,9 @@ export default class extends HTMLElement {
   }
 
   async fetchSessionStatusesSequentially(sessions, { loadVersion, delayMs = 0 } = {}) {
-    for (const session of sessions || []) {
+    const sortedSessions = this.sortSessionsByStartDateAsc(sessions || []);
+
+    for (const session of sortedSessions) {
       if (this.statusLoadVersion !== loadVersion) {
         return;
       }
@@ -230,10 +232,30 @@ export default class extends HTMLElement {
         this.sessionStatuses.set(session.id, null);
       }
 
+      if (this.statusLoadVersion !== loadVersion) {
+        return;
+      }
+      this.render();
+
       if (delayMs > 0) {
         await sleep(delayMs);
       }
     }
+  }
+
+  sortSessionsByStartDateAsc(sessions) {
+    return [...sessions].sort((left, right) => {
+      const leftStart = Number(new Date(left.startDateTime));
+      const rightStart = Number(new Date(right.startDateTime));
+      const leftValue = Number.isFinite(leftStart) ? leftStart : Number.POSITIVE_INFINITY;
+      const rightValue = Number.isFinite(rightStart) ? rightStart : Number.POSITIVE_INFINITY;
+
+      if (leftValue !== rightValue) {
+        return leftValue - rightValue;
+      }
+
+      return String(left.id || '').localeCompare(String(right.id || ''));
+    });
   }
 
   async refreshVisibleSessionStatusesOnly() {
