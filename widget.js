@@ -42,7 +42,9 @@ export default class extends HTMLElement {
   sessionStatuses = new Map();
   showMobileFilters = false;
   isLoading = false;
+  isLoadingLowPriorityStatuses = false;
   loadingMessage = 'Loading sessions and fees...';
+  statusLoadVersion = 0;
 
   constructor({ configuration, theme }) {
     super();
@@ -77,7 +79,9 @@ export default class extends HTMLElement {
   }
 
   async fetchAndRender() {
+    const loadVersion = ++this.statusLoadVersion;
     this.isLoading = true;
+    this.isLoadingLowPriorityStatuses = false;
     this.loadingMessage = 'Loading sessions and fees...';
     this.allSessions = [];
     this.sessions = [];
@@ -115,9 +119,13 @@ export default class extends HTMLElement {
     this.sessions = this.getConfiguredSessions(this.allSessions);
 
     this.render();
-    await this.refreshSessionStatuses();
+    await this.refreshPrioritySessionStatuses(loadVersion);
+    if (this.statusLoadVersion !== loadVersion) {
+      return;
+    }
     this.isLoading = false;
     this.render();
+    this.loadRemainingSessionStatuses(loadVersion);
   }
 
   filterSessionsByConfiguredCategories(sessions) {
@@ -206,19 +214,61 @@ export default class extends HTMLElement {
     return feesBySessionId;
   }
 
-  async refreshSessionStatuses() {
-    const statusEntries = await Promise.all(
-      (this.allSessions || []).map(async session => {
-        try {
-          const status = await this.cventSdk.getSessionStatus(session.id);
-          return [session.id, status || null];
-        } catch (error) {
-          return [session.id, null];
-        }
-      })
-    );
+  getPrioritizedSessions() {
+    const configuredIds = new Set((this.sessions || []).map(session => session.id));
+    const overlapExcludedIds = new Set(this.configuration?.overlapExcludedSessionIds || []);
+    const highPriority = [];
+    const lowPriority = [];
 
-    this.sessionStatuses = new Map(statusEntries);
+    (this.allSessions || []).forEach(session => {
+      if (configuredIds.has(session.id) || overlapExcludedIds.has(session.id)) {
+        highPriority.push(session);
+      } else {
+        lowPriority.push(session);
+      }
+    });
+
+    return { highPriority, lowPriority };
+  }
+
+  async refreshPrioritySessionStatuses(loadVersion) {
+    const { highPriority } = this.getPrioritizedSessions();
+    await this.fetchSessionStatusesSequentially(highPriority, { loadVersion });
+  }
+
+  async loadRemainingSessionStatuses(loadVersion) {
+    const { lowPriority } = this.getPrioritizedSessions();
+    if (!lowPriority.length || this.statusLoadVersion !== loadVersion) {
+      return;
+    }
+
+    this.isLoadingLowPriorityStatuses = true;
+    this.render();
+    await this.fetchSessionStatusesSequentially(lowPriority, { loadVersion, delayMs: 100 });
+    if (this.statusLoadVersion !== loadVersion) {
+      return;
+    }
+    this.isLoadingLowPriorityStatuses = false;
+    this.render();
+  }
+
+  async fetchSessionStatusesSequentially(sessions, { loadVersion, delayMs = 0 } = {}) {
+    for (const session of sessions || []) {
+      if (this.statusLoadVersion !== loadVersion) {
+        return;
+      }
+
+      try {
+        const status = await this.cventSdk.getSessionStatus(session.id);
+        this.sessionStatuses.set(session.id, status || null);
+      } catch (error) {
+        this.sessionStatuses.set(session.id, null);
+      }
+
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
+    }
   }
 
   render() {
@@ -566,6 +616,10 @@ export default class extends HTMLElement {
     heading.textContent = `My Schedule (${scheduleEntries.length})`;
     sidebar.appendChild(heading);
 
+    if (this.isLoadingLowPriorityStatuses) {
+      sidebar.appendChild(this.createScheduleLoadingState());
+    }
+
     if (!scheduleEntries.length) {
       const empty = document.createElement('p');
       empty.className = 'schedule-empty';
@@ -629,6 +683,20 @@ export default class extends HTMLElement {
     const total = scheduleEntries.reduce((sum, entry) => sum + (entry.isIncluded ? 0 : entry.amount), 0);
     summary.innerHTML = `<p>Session add-on total: <strong>$${total.toFixed(2)}</strong></p>`;
     sidebar.appendChild(summary);
+  }
+
+  createScheduleLoadingState() {
+    const loading = document.createElement('div');
+    loading.className = 'schedule-loading';
+    loading.innerHTML = `
+      <img
+        class="loading-gif"
+        src="data:image/gif;base64,R0lGODlhEAAQAPIAAP///wAAAMLCwkJCQmZmZv///wAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAEAAQAAADMwi63P4wyklrE2MIOggZnAdOmGYJRbExwroUmrYxWQAAIfkEBQoAAAAsAAAAABAAEAAAAzMIutz+MMpJaxNjCDoIGZwHTphmCUWxMcK6FJq2MVkAACH5BAUKAAAALAAAAAAQABAAAAMzCLrc/jDKSWsTYwg6CBmcB06YZglFsTHCuhSatjFZAAA7"
+        alt="Loading"
+      />
+      <p>Updating remaining session statuses…</p>
+    `;
+    return loading;
   }
 
   getScheduleEntries() {
@@ -866,6 +934,20 @@ export default class extends HTMLElement {
         margin: 0;
         color: #6b7280;
       }
+      .schedule-loading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: #f8fafc;
+        color: #4b5563;
+        font-size: 0.85rem;
+      }
+      .schedule-loading p {
+        margin: 0;
+      }
       .schedule-day {
         border-top: 1px solid #f1f5f9;
         padding-top: 10px;
@@ -1044,3 +1126,5 @@ const getApplicableFeeAmount = fee => {
 
   return activeChargePolicies[0].amount;
 };
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
