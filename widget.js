@@ -172,11 +172,14 @@ export default class extends HTMLElement {
   }
 
   async fetchFeesBySessionId() {
-    if (!this.cventSdk.getProductFeesGenerator) {
+    const getFeesGenerator =
+      this.cventSdk.getApplicableProductFeesGenerator || this.cventSdk.getProductFeesGenerator;
+
+    if (!getFeesGenerator) {
       return new Map();
     }
 
-    const feesGenerator = await this.cventSdk.getProductFeesGenerator({
+    const feesGenerator = await getFeesGenerator.call(this.cventSdk, {
       filter: 'isActive = 1 and productType = "Session"',
       pageSize: this.configuration?.feesPageSize ?? 200
     });
