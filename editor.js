@@ -45,6 +45,9 @@ class SessionTabsEditor extends HTMLElement {
     this.hideScheduleBoxInput = document.createElement('input');
     this.hideScheduleBoxInput.type = 'checkbox';
 
+    this.hideClosedUnavailableSessionsInput = document.createElement('input');
+    this.hideClosedUnavailableSessionsInput.type = 'checkbox';
+
     this.excludedSessionFilterInput = document.createElement('input');
     this.excludedSessionFilterInput.type = 'search';
     this.excludedSessionFilterInput.placeholder = 'Filter sessions by name';
@@ -76,6 +79,12 @@ class SessionTabsEditor extends HTMLElement {
     const hideScheduleLabel = document.createElement('label');
     hideScheduleLabel.append(this.hideScheduleBoxInput, document.createTextNode(' Hide My Schedule box'));
 
+    const hideClosedUnavailableLabel = document.createElement('label');
+    hideClosedUnavailableLabel.append(
+      this.hideClosedUnavailableSessionsInput,
+      document.createTextNode(' Hide closed/unavailable sessions from list')
+    );
+
     const excludedSessionsLabel = document.createElement('label');
     excludedSessionsLabel.textContent = 'Sessions excluded from overlap check:';
 
@@ -85,7 +94,8 @@ class SessionTabsEditor extends HTMLElement {
       this.startDateInput,
       this.endDateInput,
       this.preventOverlapInput,
-      this.hideScheduleBoxInput
+      this.hideScheduleBoxInput,
+      this.hideClosedUnavailableSessionsInput
     ].forEach(input => {
       input.onchange = () => this.captureFormState();
     });
@@ -119,6 +129,9 @@ class SessionTabsEditor extends HTMLElement {
       document.createElement('br'),
       document.createElement('br'),
       hideScheduleLabel,
+      document.createElement('br'),
+      document.createElement('br'),
+      hideClosedUnavailableLabel,
       document.createElement('br'),
       document.createElement('br'),
       excludedSessionsLabel,
@@ -174,6 +187,7 @@ class SessionTabsEditor extends HTMLElement {
     this.endDateInput.value = this._config.endDate ?? '';
     this.preventOverlapInput.checked = Boolean(this._config.preventOverlapRegistration);
     this.hideScheduleBoxInput.checked = Boolean(this._config.hideMyScheduleBox);
+    this.hideClosedUnavailableSessionsInput.checked = Boolean(this._config.hideClosedUnavailableSessions);
     this.renderCategoryOptions();
     this.renderExcludedSessionOptions();
   }
@@ -289,6 +303,7 @@ class SessionTabsEditor extends HTMLElement {
       endDate: this.endDateInput.value || '',
       preventOverlapRegistration: this.preventOverlapInput.checked,
       hideMyScheduleBox: this.hideScheduleBoxInput.checked,
+      hideClosedUnavailableSessions: this.hideClosedUnavailableSessionsInput.checked,
       allowedCategoryIds: this._config.allowedCategoryIds || [],
       overlapExcludedSessionIds: this._config.overlapExcludedSessionIds || []
     };
