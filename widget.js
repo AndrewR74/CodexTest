@@ -125,9 +125,23 @@ export default class extends HTMLElement {
         feeAmount: fee ? getApplicableFeeAmount(fee) ?? fee.amount : session.feeAmount
       };
     });
-    this.sessions = this.getConfiguredSessions(this.allSessions);
     this.statusFetchQueue = [];
     this.pendingStatusSessionIds = new Set();
+    this.sessions = [];
+    this.render();
+
+    const configuredSessions = this.getConfiguredSessions(this.allSessions);
+    if (this.configuration?.hideClosedUnavailableSessions) {
+      await this.fetchSessionStatusesSequentially(configuredSessions, {
+        loadVersion,
+        delayMs: this.statusFetchDelayMs
+      });
+      if (this.statusLoadVersion !== loadVersion) {
+        return;
+      }
+    }
+
+    this.sessions = configuredSessions;
     this.isLoading = false;
     this.render();
   }
@@ -481,6 +495,11 @@ export default class extends HTMLElement {
   }
 
   updateSessionTileStatus(sessionId) {
+    if (this.configuration?.hideClosedUnavailableSessions) {
+      this.render();
+      return;
+    }
+
     const tile = this.sessionTilesById.get(sessionId);
     if (!tile) {
       return;
@@ -766,6 +785,10 @@ export default class extends HTMLElement {
   getFilteredAndSortedSessions(sessions) {
     let filtered = [...sessions];
 
+    if (this.configuration?.hideClosedUnavailableSessions) {
+      filtered = filtered.filter(session => !this.isClosedOrUnavailableSession(session.id));
+    }
+
     if (this.selectedCategoryId) {
       filtered = filtered.filter(session => session.category?.id === this.selectedCategoryId);
     }
@@ -798,6 +821,15 @@ export default class extends HTMLElement {
     });
 
     return filtered;
+  }
+
+  isClosedOrUnavailableSession(sessionId) {
+    if (!this.sessionStatuses.has(sessionId)) {
+      return false;
+    }
+
+    const statusCode = this.getStatusCodeForSession(sessionId);
+    return ['CLOSED', 'UNAVAILABLE'].includes(statusCode);
   }
 
   getUniqueCategories(sessions) {
