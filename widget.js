@@ -46,6 +46,7 @@ export default class extends HTMLElement {
   statusLoadVersion = 0;
   statusFetchDelayMs = 50;
   sessionTilesById = new Map();
+  renderedSessionIds = [];
   statusFetchQueue = [];
   pendingStatusSessionIds = new Set();
   isProcessingStatusQueue = false;
@@ -458,6 +459,7 @@ export default class extends HTMLElement {
     const leftColumn = this.sessionList;
     leftColumn.replaceChildren();
     this.sessionTilesById = new Map();
+    this.renderedSessionIds = [];
     this.ensureStatusObserver();
 
     sessions.forEach(session => {
@@ -469,6 +471,7 @@ export default class extends HTMLElement {
       );
       tile.dataset.sessionId = session.id;
       this.sessionTilesById.set(session.id, tile);
+      this.renderedSessionIds.push(session.id);
       leftColumn.appendChild(tile);
       this.statusObserver?.observe(tile);
     });
@@ -1134,8 +1137,14 @@ export default class extends HTMLElement {
             return;
           }
 
-          this.statusObserver?.unobserve(entry.target);
-          this.queueStatusFetch(sessionId);
+          const sessionIdsToFetch = this.getSessionIdsToFetchInAdvance(sessionId, 3);
+          sessionIdsToFetch.forEach(nextSessionId => {
+            const tile = this.sessionTilesById.get(nextSessionId);
+            if (tile) {
+              this.statusObserver?.unobserve(tile);
+            }
+            this.queueStatusFetch(nextSessionId);
+          });
         });
         this.processQueuedStatusFetches({ loadVersion: this.statusLoadVersion, delayMs: this.statusFetchDelayMs });
       },
@@ -1167,6 +1176,16 @@ export default class extends HTMLElement {
 
     this.pendingStatusSessionIds.add(sessionId);
     this.statusFetchQueue.push(sessionId);
+  }
+
+  getSessionIdsToFetchInAdvance(sessionId, additionalAheadCount = 0) {
+    const visibleSessionIndex = this.renderedSessionIds.indexOf(sessionId);
+    if (visibleSessionIndex === -1) {
+      return [sessionId];
+    }
+
+    const maxIndex = Math.min(this.renderedSessionIds.length - 1, visibleSessionIndex + additionalAheadCount);
+    return this.renderedSessionIds.slice(visibleSessionIndex, maxIndex + 1);
   }
 
   async processQueuedStatusFetches({ loadVersion, delayMs = 0 } = {}) {
