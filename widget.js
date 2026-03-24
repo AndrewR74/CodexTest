@@ -131,16 +131,6 @@ export default class extends HTMLElement {
     this.render();
 
     const configuredSessions = this.getConfiguredSessions(this.allSessions);
-    if (this.configuration?.hideClosedUnavailableSessions) {
-      await this.fetchSessionStatusesSequentially(configuredSessions, {
-        loadVersion,
-        delayMs: this.statusFetchDelayMs
-      });
-      if (this.statusLoadVersion !== loadVersion) {
-        return;
-      }
-    }
-
     this.sessions = configuredSessions;
     this.isLoading = false;
     this.render();

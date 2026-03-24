@@ -32,6 +32,7 @@ export class SessionTile extends HTMLElement {
 
   connectedCallback() {
     const s = this.session;
+    const isStatusPending = this.selectionStatus === undefined;
     const card = document.createElement('article');
     card.className = 'tile';
 
@@ -39,11 +40,16 @@ export class SessionTile extends HTMLElement {
     content.className = 'content';
 
     const name = document.createElement('h3');
-    name.textContent = s.name;
+    name.className = 'title';
+    name.textContent = isStatusPending ? '• • •' : s.name;
+    if (isStatusPending) {
+      name.setAttribute('aria-label', 'Loading session');
+    }
     setStylesOnElement({ ...defaultTheme.header3, ...this.theme.header3, margin: '0 0 8px' }, name);
 
     const desc = document.createElement('p');
-    desc.innerHTML = s.description || 'No description available.';
+    desc.className = 'description';
+    desc.innerHTML = isStatusPending ? '' : s.description || 'No description available.';
     setStylesOnElement({ ...defaultTheme.paragraph, ...this.theme.paragraph, margin: '0 0 8px', fontSize: '0.92rem' }, desc);
 
     const location = document.createElement('p');
@@ -169,6 +175,26 @@ export class SessionTile extends HTMLElement {
       .register-btn:disabled {
         opacity: 0.9;
         cursor: not-allowed;
+      }
+      .title {
+        min-height: 1.2em;
+      }
+      .title[aria-label="Loading session"] {
+        letter-spacing: 0.35rem;
+        color: #9ca3af;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .description:empty {
+        min-height: 1.1em;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.45;
+        }
+        50% {
+          opacity: 1;
+        }
       }
       @media (max-width: 760px) {
         .tile {
