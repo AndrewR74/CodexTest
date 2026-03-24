@@ -158,7 +158,12 @@ export default class extends HTMLElement {
 
   getConfiguredSessions(sessions) {
     const inDateRange = (sessions || []).filter(session => session.inConfiguredRange !== false);
-    return this.filterSessionsByConfiguredCategories(inDateRange);
+    const openForRegistrationSessions = inDateRange.filter(session => this.isSessionOpenForRegistration(session));
+    return this.filterSessionsByConfiguredCategories(openForRegistrationSessions);
+  }
+
+  isSessionOpenForRegistration(session) {
+    return session?.isOpenForRegistration !== false;
   }
 
   resolveEffectiveDateRange(sessions) {
