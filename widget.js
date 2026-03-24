@@ -518,7 +518,7 @@ export default class extends HTMLElement {
     const isRegisterAction = ['OPEN', 'OPEN_FROM_WAITLIST', 'WAITLIST_AVAILABLE'].includes(currentStatus);
 
     if (isRegisterAction && this.configuration?.preventOverlapRegistration && session) {
-      const conflict = this.findOverlappingSelectedSession(session);
+      const conflict = await this.findOverlappingSelectedSession(session);
       if (conflict) {
         const shouldSwap = await this.showConflictModal(conflict, session);
         if (!shouldSwap) {
@@ -545,25 +545,40 @@ export default class extends HTMLElement {
     };
   }
 
-  findOverlappingSelectedSession(targetSession) {
+  async findOverlappingSelectedSession(targetSession) {
     const excludedIds = new Set(this.configuration?.overlapExcludedSessionIds || []);
     if (excludedIds.has(targetSession.id)) {
       return null;
     }
 
-    const selectedSessions = (this.allSessions || []).filter(session => {
-      const status = this.getStatusCodeForSession(session.id);
-      return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(status);
+    const overlappingSessions = (this.allSessions || []).filter(session => {
+      if (session.id === targetSession.id || excludedIds.has(session.id)) {
+        return false;
+      }
+      return this.sessionsOverlap(session, targetSession);
     });
 
-    return (
-      selectedSessions.find(session => {
-        if (session.id === targetSession.id || excludedIds.has(session.id)) {
-          return false;
-        }
-        return this.sessionsOverlap(session, targetSession);
-      }) || null
-    );
+    for (const session of overlappingSessions) {
+      const status = await this.getLoadedStatusCodeForSession(session.id);
+      if (['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(status)) {
+        return session;
+      }
+    }
+
+    return null;
+  }
+
+  async getLoadedStatusCodeForSession(sessionId) {
+    if (!this.sessionStatuses.has(sessionId)) {
+      try {
+        const status = await this.cventSdk.getSessionStatus(sessionId);
+        this.sessionStatuses.set(sessionId, status || null);
+      } catch (error) {
+        this.sessionStatuses.set(sessionId, null);
+      }
+    }
+
+    return this.getStatusCodeForSession(sessionId);
   }
 
   sessionsOverlap(sessionA, sessionB) {
