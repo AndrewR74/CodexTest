@@ -56,7 +56,7 @@ class SessionTabsEditor extends HTMLElement {
     this.registrationRulesInput = document.createElement('textarea');
     this.registrationRulesInput.rows = 6;
     this.registrationRulesInput.placeholder =
-      '[\n  {\n    "registrationTypeId": "REG_TYPE_ID",\n    "categoryId": "CATEGORY_ID",\n    "minSessions": 2\n  }\n]';
+      '[\n  {\n    "description": "Weekend pass minimum",\n    "registrationTypeId": "REG_TYPE_ID",\n    "categoryId": "CATEGORY_ID",\n    "minSessions": 2\n  }\n]';
     this.rulesValidationMessage = document.createElement('p');
     this.rulesValidationMessage.style.margin = '6px 0 0 0';
     this.rulesValidationMessage.style.fontSize = '12px';
@@ -96,7 +96,8 @@ class SessionTabsEditor extends HTMLElement {
     const excludedSessionsLabel = document.createElement('label');
     excludedSessionsLabel.textContent = 'Sessions excluded from overlap check:';
     const registrationRulesLabel = document.createElement('label');
-    registrationRulesLabel.textContent = 'Registration type minimum category session rules (JSON):';
+    registrationRulesLabel.textContent =
+      'Registration type minimum category session rules (JSON, optional "description" is for internal identification only):';
     registrationRulesLabel.style.display = 'block';
     registrationRulesLabel.appendChild(document.createElement('br'));
     registrationRulesLabel.appendChild(this.registrationRulesInput);
@@ -227,6 +228,7 @@ class SessionTabsEditor extends HTMLElement {
 
       const normalizedRules = parsed
         .map(rule => ({
+          description: typeof rule?.description === 'string' ? rule.description.trim() : '',
           registrationTypeId: typeof rule?.registrationTypeId === 'string' ? rule.registrationTypeId.trim() : '',
           categoryId: typeof rule?.categoryId === 'string' ? rule.categoryId.trim() : '',
           minSessions: Number(rule?.minSessions)
