@@ -145,6 +145,10 @@ export default class extends HTMLElement {
 
     const configuredSessions = this.getConfiguredSessions(this.allSessions);
     this.sessions = configuredSessions;
+    await this.preloadRegisteredSessionStatuses({ loadVersion, sessions: configuredSessions });
+    if (this.statusLoadVersion !== loadVersion) {
+      return;
+    }
     this.isLoading = false;
     this.render();
   }
@@ -419,7 +423,7 @@ export default class extends HTMLElement {
           continue;
         }
 
-        const registrationState = JSON.parse(rawState);
+        const registrationState = JSON.parse(rawState)?.registrationState;
         const eventRegistrations = registrationState?.regCart?.eventRegistrations;
         if (!eventRegistrations || typeof eventRegistrations !== 'object') {
           continue;
@@ -444,6 +448,27 @@ export default class extends HTMLElement {
     }
 
     return selectedProductIds;
+  }
+
+
+  async preloadRegisteredSessionStatuses({ loadVersion, sessions } = {}) {
+    const registeredProductIds = this.getReadOnlyRegisteredProductIds();
+    if (!registeredProductIds.size) {
+      return;
+    }
+
+    const prioritizedSessions = this.sortSessionsByStartDateAsc(
+      (sessions || []).filter(session => registeredProductIds.has(session.id))
+    );
+
+    if (!prioritizedSessions.length) {
+      return;
+    }
+
+    await this.fetchSessionStatusesSequentially(prioritizedSessions, {
+      loadVersion,
+      delayMs: this.statusFetchDelayMs
+    });
   }
 
   setSessionStatus(sessionId, status) {
@@ -592,24 +617,6 @@ export default class extends HTMLElement {
     const activeRule = this.getActiveRegistrationRule();
     if (!activeRule) {
       return { hasRule: false, isValid: true, message: '' };
-    }
-
-    const unloadedSessionIds = this.getCategorySessionIdsWithUnloadedStatuses(activeRule.categoryId);
-    if (unloadedSessionIds.length) {
-      const registeredProductIds = this.getReadOnlyRegisteredProductIds();
-      const prioritizedIds = unloadedSessionIds.filter(sessionId => registeredProductIds.has(sessionId));
-      const remainingIds = unloadedSessionIds.filter(sessionId => !prioritizedIds.includes(sessionId));
-      const statusLoadOrder = [...prioritizedIds, ...remainingIds];
-      const loadingOverlay = this.showRequirementCheckLoadingModal();
-      try {
-        const statusCheck = await this.loadStatusesForSessionsUntilRuleSatisfied(statusLoadOrder);
-        if (statusCheck?.isValid) {
-          this.render();
-          return statusCheck;
-        }
-      } finally {
-        loadingOverlay.remove();
-      }
     }
 
     this.render();
