@@ -287,19 +287,17 @@ export default class extends HTMLElement {
 
   async refreshVisibleSessionStatusesOnly() {
     const loadVersion = ++this.statusLoadVersion;
-    this.isLoading = true;
-    this.loadingMessage = 'Loading registration statuses...';
     this.sessionStatuses = new Map();
     this.statusFetchQueue = [];
     this.pendingStatusSessionIds = new Set();
-    this.render();
+    this.sessionTilesById.forEach(tile => {
+      tile.updateSelectionStatus(undefined);
+    });
     this.enqueueVisibleSessionStatusFetches();
     await this.processQueuedStatusFetches({ loadVersion, delayMs: this.statusFetchDelayMs });
     if (this.statusLoadVersion !== loadVersion) {
       return;
     }
-    this.isLoading = false;
-    this.render();
   }
 
   render() {
@@ -686,7 +684,9 @@ export default class extends HTMLElement {
 
   updateSessionTileStatus(sessionId) {
     if (this.configuration?.hideClosedUnavailableSessions) {
-      this.render();
+      this.renderSessionResults();
+      this.updateRuleStatusMessage();
+      this.applyNavigationValidity();
       return;
     }
 
