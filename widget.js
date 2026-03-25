@@ -55,7 +55,6 @@ export default class extends HTMLElement {
   currentRegistrationTypeId = '';
   nextNavigationAttemptListener = null;
   bypassNextNavigationGuard = false;
-  registeredStatusCodes = new Set(['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED']);
 
   constructor({ configuration, theme }) {
     super();
@@ -401,50 +400,54 @@ export default class extends HTMLElement {
     }).length;
   }
 
-  getStatusCacheStorageKey() {
-    const registrationType = this.currentRegistrationTypeId || 'ALL';
-    const widgetId = this.configuration?.widgetInstanceId || this.configuration?.widgetId || 'default';
-    const scope = `${window.location.pathname}|${registrationType}|${widgetId}`;
-    return `session-browser:registered-session-ids:${scope}`;
-  }
+  getReadOnlyRegisteredProductIds() {
+    const selectedProductIds = new Set();
 
-  getCachedRegisteredSessionIds() {
+    if (!window?.localStorage) {
+      return selectedProductIds;
+    }
+
     try {
-      const raw = window.localStorage.getItem(this.getStatusCacheStorageKey());
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter(value => typeof value === 'string' && value) : [];
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (!key?.startsWith('registration-')) {
+          continue;
+        }
+
+        const rawState = window.localStorage.getItem(key);
+        if (!rawState) {
+          continue;
+        }
+
+        const registrationState = JSON.parse(rawState);
+        const eventRegistrations = registrationState?.regCart?.eventRegistrations;
+        if (!eventRegistrations || typeof eventRegistrations !== 'object') {
+          continue;
+        }
+
+        Object.values(eventRegistrations).forEach(eventRegistration => {
+          const sessionRegistrations = eventRegistration?.sessionRegistrations;
+          if (!sessionRegistrations || typeof sessionRegistrations !== 'object') {
+            return;
+          }
+
+          Object.values(sessionRegistrations).forEach(sessionRegistration => {
+            const productId = sessionRegistration?.productId;
+            if (typeof productId === 'string' && productId) {
+              selectedProductIds.add(productId);
+            }
+          });
+        });
+      }
     } catch (error) {
-      return [];
-    }
-  }
-
-  setCachedRegisteredSessionIds(sessionIds) {
-    try {
-      const uniqueIds = [...new Set((sessionIds || []).filter(value => typeof value === 'string' && value))];
-      window.localStorage.setItem(this.getStatusCacheStorageKey(), JSON.stringify(uniqueIds));
-    } catch (error) {
-      // no-op
-    }
-  }
-
-  updateCachedRegisteredSessionId(sessionId, status) {
-    if (!sessionId) {
-      return;
+      return new Set();
     }
 
-    const currentIds = new Set(this.getCachedRegisteredSessionIds());
-    const statusCode = typeof status === 'string' ? status : status?.status;
-    if (this.registeredStatusCodes.has(statusCode)) {
-      currentIds.add(sessionId);
-    } else {
-      currentIds.delete(sessionId);
-    }
-    this.setCachedRegisteredSessionIds([...currentIds]);
+    return selectedProductIds;
   }
 
   setSessionStatus(sessionId, status) {
     this.sessionStatuses.set(sessionId, status || null);
-    this.updateCachedRegisteredSessionId(sessionId, status || null);
   }
 
   getRuleStatus() {
@@ -593,8 +596,8 @@ export default class extends HTMLElement {
 
     const unloadedSessionIds = this.getCategorySessionIdsWithUnloadedStatuses(activeRule.categoryId);
     if (unloadedSessionIds.length) {
-      const cachedRegisteredIds = this.getCachedRegisteredSessionIds();
-      const prioritizedIds = cachedRegisteredIds.filter(sessionId => unloadedSessionIds.includes(sessionId));
+      const registeredProductIds = this.getReadOnlyRegisteredProductIds();
+      const prioritizedIds = unloadedSessionIds.filter(sessionId => registeredProductIds.has(sessionId));
       const remainingIds = unloadedSessionIds.filter(sessionId => !prioritizedIds.includes(sessionId));
       const statusLoadOrder = [...prioritizedIds, ...remainingIds];
       const loadingOverlay = this.showRequirementCheckLoadingModal();
