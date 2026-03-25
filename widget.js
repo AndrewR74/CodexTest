@@ -51,6 +51,8 @@ export default class extends HTMLElement {
   pendingStatusSessionIds = new Set();
   isProcessingStatusQueue = false;
   statusObserver = null;
+  navigator = null;
+  currentRegistrationTypeId = '';
 
   constructor({ configuration, theme }) {
     super();
@@ -69,6 +71,8 @@ export default class extends HTMLElement {
     this.shadowRoot.append(this.createStyles(), this.root);
 
     this.initializeLayout();
+    this.initNavigatorValidation();
+    await this.hydrateCurrentRegistrationTypeId();
     await this.fetchAndRender();
 
     const rerender = async () => {
@@ -80,7 +84,10 @@ export default class extends HTMLElement {
     };
 
     const admitItemObserve = this.cventSdk.observe(ObserveSubject.ADMISSION_ITEM, rerender);
-    const regTypeObserve = this.cventSdk.observe(ObserveSubject.REGISTRATION_TYPE, rerender);
+    const regTypeObserve = this.cventSdk.observe(ObserveSubject.REGISTRATION_TYPE, regTypePayload => {
+      this.currentRegistrationTypeId = this.extractRegistrationTypeId(regTypePayload);
+      rerender();
+    });
     this.unsubCallbacks.push(admitItemObserve.unobserve, regTypeObserve.unobserve);
   }
 
@@ -135,6 +142,42 @@ export default class extends HTMLElement {
     this.sessions = configuredSessions;
     this.isLoading = false;
     this.render();
+  }
+
+  async initNavigatorValidation() {
+    if (!this.cventSdk?.getNavigator) {
+      return;
+    }
+
+    try {
+      this.navigator = await this.cventSdk.getNavigator();
+      this.applyNavigationValidity();
+    } catch (error) {
+      this.navigator = null;
+    }
+  }
+
+  async hydrateCurrentRegistrationTypeId() {
+    try {
+      if (this.cventSdk?.getRegistrationType) {
+        const registrationType = await this.cventSdk.getRegistrationType();
+        this.currentRegistrationTypeId = this.extractRegistrationTypeId(registrationType);
+      }
+    } catch (error) {
+      this.currentRegistrationTypeId = this.currentRegistrationTypeId || '';
+    }
+  }
+
+  extractRegistrationTypeId(regTypePayload) {
+    if (!regTypePayload) {
+      return '';
+    }
+
+    if (typeof regTypePayload === 'string') {
+      return regTypePayload;
+    }
+
+    return regTypePayload.registrationTypeId || regTypePayload.id || '';
   }
 
   filterSessionsByConfiguredCategories(sessions) {
@@ -288,6 +331,8 @@ export default class extends HTMLElement {
     this.updateCategoryTabs(categories);
     this.updateFilterToolbar();
     this.updateMainContent(selectedDaySessions, scheduleEntries);
+    this.updateRuleStatusMessage();
+    this.applyNavigationValidity();
   }
 
   initializeLayout() {
@@ -318,11 +363,88 @@ export default class extends HTMLElement {
     const header = document.createElement('div');
     header.className = 'page-title-section';
     const widgetTitle = this.configuration?.widgetTitle || 'Build Your Weekend Schedule';
+    this.ruleMessage = document.createElement('p');
+    this.ruleMessage.className = 'rule-message';
     header.innerHTML = `
       <h2>${widgetTitle}</h2>
       <p>Browse sessions, refine results, and add your favorites to a live schedule summary.</p>
     `;
+    header.appendChild(this.ruleMessage);
     return header;
+  }
+
+  normalizeRegistrationCategoryRules() {
+    const rules = this.configuration?.registrationCategoryRules;
+    if (!Array.isArray(rules)) {
+      return [];
+    }
+
+    return rules
+      .map(rule => ({
+        registrationTypeId: typeof rule?.registrationTypeId === 'string' ? rule.registrationTypeId.trim() : '',
+        categoryId: typeof rule?.categoryId === 'string' ? rule.categoryId.trim() : '',
+        minSessions: Number(rule?.minSessions)
+      }))
+      .filter(rule => rule.registrationTypeId && rule.categoryId && Number.isFinite(rule.minSessions) && rule.minSessions > 0);
+  }
+
+  getActiveRegistrationRule() {
+    const currentRegistrationTypeId = this.currentRegistrationTypeId;
+    if (!currentRegistrationTypeId) {
+      return null;
+    }
+
+    const rules = this.normalizeRegistrationCategoryRules();
+    return rules.find(rule => rule.registrationTypeId === currentRegistrationTypeId) || null;
+  }
+
+  getSelectedCountForCategory(categoryId) {
+    return (this.allSessions || []).filter(session => {
+      if (session.category?.id !== categoryId) {
+        return false;
+      }
+      const statusCode = this.getStatusCodeForSession(session.id);
+      return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(statusCode);
+    }).length;
+  }
+
+  getRuleStatus() {
+    const activeRule = this.getActiveRegistrationRule();
+    if (!activeRule) {
+      return { hasRule: false, isValid: true, message: '' };
+    }
+
+    const categoryName =
+      (this.allSessions || []).find(session => session.category?.id === activeRule.categoryId)?.category?.name ||
+      'the required category';
+    const selectedCount = this.getSelectedCountForCategory(activeRule.categoryId);
+    const isValid = selectedCount >= activeRule.minSessions;
+    const sessionsLabel = activeRule.minSessions === 1 ? 'session' : 'sessions';
+    return {
+      hasRule: true,
+      isValid,
+      message: `Required: select at least ${activeRule.minSessions} ${sessionsLabel} from ${categoryName}. (${selectedCount}/${activeRule.minSessions} selected)`
+    };
+  }
+
+  updateRuleStatusMessage() {
+    if (!this.ruleMessage) {
+      return;
+    }
+
+    const ruleStatus = this.getRuleStatus();
+    this.ruleMessage.textContent = ruleStatus.message;
+    this.ruleMessage.classList.toggle('visible', Boolean(ruleStatus.hasRule));
+    this.ruleMessage.classList.toggle('invalid', Boolean(ruleStatus.hasRule && !ruleStatus.isValid));
+  }
+
+  applyNavigationValidity() {
+    if (!this.navigator?.setIsValid) {
+      return;
+    }
+
+    const ruleStatus = this.getRuleStatus();
+    this.navigator.setIsValid(ruleStatus.isValid);
   }
 
   updateCategoryTabs(categories) {
@@ -877,6 +999,23 @@ export default class extends HTMLElement {
         margin: 10px auto 0;
         max-width: 720px;
         color: #4b5563;
+      }
+      .rule-message {
+        display: none;
+        margin: 12px auto 0;
+        max-width: 720px;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-weight: 600;
+      }
+      .rule-message.visible {
+        display: block;
+      }
+      .rule-message.invalid {
+        background: #fef2f2;
+        color: #b91c1c;
       }
       .category-tabs {
         display: flex;
