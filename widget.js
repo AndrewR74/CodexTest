@@ -472,61 +472,15 @@ export default class extends HTMLElement {
     this.persistCachedRegisteredSessionIds([...cachedIds]);
   }
 
-  getReadOnlyRegisteredProductIds() {
-    const selectedProductIds = new Set();
-
-    if (!window?.localStorage) {
-      return selectedProductIds;
-    }
-
-    try {
-      for (let index = 0; index < window.localStorage.length; index += 1) {
-        const key = window.localStorage.key(index);
-        if (!key?.startsWith('registration-')) {
-          continue;
-        }
-
-        const rawState = window.localStorage.getItem(key);
-        if (!rawState) {
-          continue;
-        }
-
-        const registrationState = JSON.parse(rawState)?.registrationState;
-        const eventRegistrations = registrationState?.regCart?.eventRegistrations;
-        if (!eventRegistrations || typeof eventRegistrations !== 'object') {
-          continue;
-        }
-
-        Object.values(eventRegistrations).forEach(eventRegistration => {
-          const sessionRegistrations = eventRegistration?.sessionRegistrations;
-          if (!sessionRegistrations || typeof sessionRegistrations !== 'object') {
-            return;
-          }
-
-          Object.values(sessionRegistrations).forEach(sessionRegistration => {
-            const productId = sessionRegistration?.productId;
-            if (typeof productId === 'string' && productId) {
-              selectedProductIds.add(productId);
-            }
-          });
-        });
-      }
-    } catch (error) {
-      return new Set();
-    }
-
-    return selectedProductIds;
-  }
-
-
   async preloadRegisteredSessionStatuses({ loadVersion, sessions } = {}) {
-    const registeredProductIds = this.getReadOnlyRegisteredProductIds();
-    if (!registeredProductIds.size) {
+    const sessionsById = new Map((sessions || []).map(session => [session.id, session]));
+    const cachedSessionIds = this.getCachedRegisteredSessionIds().filter(sessionId => sessionsById.has(sessionId));
+    if (!cachedSessionIds.length) {
       return;
     }
 
     const prioritizedSessions = this.sortSessionsByStartDateAsc(
-      (sessions || []).filter(session => registeredProductIds.has(session.id))
+      cachedSessionIds.map(sessionId => sessionsById.get(sessionId)).filter(Boolean)
     );
 
     if (!prioritizedSessions.length) {
