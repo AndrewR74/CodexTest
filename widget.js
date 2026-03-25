@@ -1163,6 +1163,9 @@ export default class extends HTMLElement {
       .session-list {
         display: grid;
         gap: 12px;
+        max-height: 100vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       .schedule-sidebar {
         position: sticky;
