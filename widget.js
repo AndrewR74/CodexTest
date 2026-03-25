@@ -54,6 +54,7 @@ export default class extends HTMLElement {
   navigator = null;
   currentRegistrationTypeId = '';
   nextNavigationAttemptListener = null;
+  bypassNextNavigationGuard = false;
 
   constructor({ configuration, theme }) {
     super();
@@ -443,7 +444,11 @@ export default class extends HTMLElement {
       return;
     }
 
-    this.nextNavigationAttemptListener = event => {
+    this.nextNavigationAttemptListener = async event => {
+      if (this.bypassNextNavigationGuard) {
+        return;
+      }
+
       const actionable = event.target?.closest?.('button, a, [role="button"], input[type="button"], input[type="submit"]');
       if (!actionable) {
         return;
@@ -458,15 +463,22 @@ export default class extends HTMLElement {
         return;
       }
 
-      const ruleStatus = this.getRuleStatus();
-      if (!ruleStatus.hasRule || ruleStatus.isValid) {
+      const initialRuleStatus = this.getRuleStatus();
+      if (!initialRuleStatus.hasRule || initialRuleStatus.isValid) {
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
-      this.showRuleRequirementModal(ruleStatus.message);
+
+      const finalRuleStatus = await this.validateRuleBeforeNavigation();
+      if (finalRuleStatus.isValid) {
+        this.retryNavigationAction(actionable);
+        return;
+      }
+
+      this.showRuleRequirementModal(finalRuleStatus.message);
     };
 
     document.addEventListener('click', this.nextNavigationAttemptListener, true);
@@ -514,6 +526,88 @@ export default class extends HTMLElement {
     this.shadowRoot.appendChild(overlay);
     this.ruleRequirementModalOverlay = overlay;
   }
+
+  getCategorySessionIdsWithUnloadedStatuses(categoryId) {
+    if (!categoryId) {
+      return [];
+    }
+
+    return (this.allSessions || [])
+      .filter(session => session.category?.id === categoryId)
+      .map(session => session.id)
+      .filter(sessionId => !this.sessionStatuses.has(sessionId));
+  }
+
+  async validateRuleBeforeNavigation() {
+    const activeRule = this.getActiveRegistrationRule();
+    if (!activeRule) {
+      return { hasRule: false, isValid: true, message: '' };
+    }
+
+    const unloadedSessionIds = this.getCategorySessionIdsWithUnloadedStatuses(activeRule.categoryId);
+    if (unloadedSessionIds.length) {
+      const loadingOverlay = this.showRequirementCheckLoadingModal();
+      try {
+        await this.loadStatusesForSessions(unloadedSessionIds);
+      } finally {
+        loadingOverlay.remove();
+      }
+    }
+
+    this.render();
+    return this.getRuleStatus();
+  }
+
+  async loadStatusesForSessions(sessionIds) {
+    for (const sessionId of sessionIds) {
+      if (!sessionId || this.sessionStatuses.has(sessionId)) {
+        continue;
+      }
+
+      try {
+        const status = await this.cventSdk.getSessionStatus(sessionId);
+        this.sessionStatuses.set(sessionId, status || null);
+      } catch (error) {
+        this.sessionStatuses.set(sessionId, null);
+      }
+
+      this.updateSessionTileStatus(sessionId);
+    }
+  }
+
+  showRequirementCheckLoadingModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'conflict-modal-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'conflict-modal';
+    modal.innerHTML = `
+      <h3>Checking Requirements</h3>
+      <img
+        class="loading-gif"
+        src="data:image/gif;base64,R0lGODlhEAAQAPIAAP///wAAAMLCwkJCQmZmZv///wAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAEAAQAAADMwi63P4wyklrE2MIOggZnAdOmGYJRbExwroUmrYxWQAAIfkEBQoAAAAsAAAAABAAEAAAAzMIutz+MMpJaxNjCDoIGZwHTphmCUWxMcK6FJq2MVkAACH5BAUKAAAALAAAAAAQABAAAAMzCLrc/jDKSWsTYwg6CBmcB06YZglFsTHCuhSatjFZAAA7"
+        alt="Checking requirements"
+      />
+      <p>We are checking requirements. Please wait as this could take 30 seconds.</p>
+      <progress></progress>
+    `;
+
+    overlay.appendChild(modal);
+    this.shadowRoot.appendChild(overlay);
+    return overlay;
+  }
+
+  retryNavigationAction(actionable) {
+    this.bypassNextNavigationGuard = true;
+    try {
+      actionable.click?.();
+    } finally {
+      setTimeout(() => {
+        this.bypassNextNavigationGuard = false;
+      }, 0);
+    }
+  }
+
 
   updateCategoryTabs(categories) {
     const wrap = this.categoryTabs;
