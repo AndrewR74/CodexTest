@@ -72,8 +72,6 @@ export default class extends HTMLElement {
 
     this.initializeLayout();
     this.initNavigatorValidation();
-    await this.hydrateCurrentRegistrationTypeId();
-    await this.fetchAndRender();
 
     const rerender = async () => {
       if (this.configuration?.hideMyScheduleBox) {
@@ -88,7 +86,10 @@ export default class extends HTMLElement {
       this.currentRegistrationTypeId = this.extractRegistrationTypeId(regTypePayload);
       rerender();
     });
+    this.currentRegistrationTypeId = this.extractRegistrationTypeId(regTypeObserve?.value);
     this.unsubCallbacks.push(admitItemObserve.unobserve, regTypeObserve.unobserve);
+
+    await this.fetchAndRender();
   }
 
   disconnectedCallback() {
@@ -154,17 +155,6 @@ export default class extends HTMLElement {
       this.applyNavigationValidity();
     } catch (error) {
       this.navigator = null;
-    }
-  }
-
-  async hydrateCurrentRegistrationTypeId() {
-    try {
-      if (this.cventSdk?.getRegistrationType) {
-        const registrationType = await this.cventSdk.getRegistrationType();
-        this.currentRegistrationTypeId = this.extractRegistrationTypeId(registrationType);
-      }
-    } catch (error) {
-      this.currentRegistrationTypeId = this.currentRegistrationTypeId || '';
     }
   }
 
