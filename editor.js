@@ -53,6 +53,14 @@ class SessionTabsEditor extends HTMLElement {
     this.excludedSessionFilterInput.placeholder = 'Filter sessions by name';
 
     this.excludedSessionsList = document.createElement('div');
+    this.registrationRulesInput = document.createElement('textarea');
+    this.registrationRulesInput.rows = 6;
+    this.registrationRulesInput.placeholder =
+      '[\n  {\n    "registrationTypeId": "REG_TYPE_ID",\n    "categoryId": "CATEGORY_ID",\n    "minSessions": 2\n  }\n]';
+    this.rulesValidationMessage = document.createElement('p');
+    this.rulesValidationMessage.style.margin = '6px 0 0 0';
+    this.rulesValidationMessage.style.fontSize = '12px';
+    this.rulesValidationMessage.style.color = '#b91c1c';
 
     const widgetTitleLabel = document.createElement('label');
     widgetTitleLabel.textContent = 'Widget title: ';
@@ -87,6 +95,12 @@ class SessionTabsEditor extends HTMLElement {
 
     const excludedSessionsLabel = document.createElement('label');
     excludedSessionsLabel.textContent = 'Sessions excluded from overlap check:';
+    const registrationRulesLabel = document.createElement('label');
+    registrationRulesLabel.textContent = 'Registration type minimum category session rules (JSON):';
+    registrationRulesLabel.style.display = 'block';
+    registrationRulesLabel.appendChild(document.createElement('br'));
+    registrationRulesLabel.appendChild(this.registrationRulesInput);
+    registrationRulesLabel.appendChild(this.rulesValidationMessage);
 
     [
       this.widgetTitleInput,
@@ -101,6 +115,7 @@ class SessionTabsEditor extends HTMLElement {
     });
 
     this.widgetTitleInput.oninput = () => this.captureFormState();
+    this.registrationRulesInput.oninput = () => this.captureFormState();
     this.categoryFilterInput.oninput = () => this.renderCategoryOptions();
     this.excludedSessionFilterInput.oninput = () => this.renderExcludedSessionOptions();
 
@@ -137,7 +152,9 @@ class SessionTabsEditor extends HTMLElement {
       excludedSessionsLabel,
       document.createElement('br'),
       this.excludedSessionFilterInput,
-      this.excludedSessionsList
+      this.excludedSessionsList,
+      document.createElement('hr'),
+      registrationRulesLabel
     );
     this.shadowRoot.append(this.container);
 
@@ -188,8 +205,40 @@ class SessionTabsEditor extends HTMLElement {
     this.preventOverlapInput.checked = Boolean(this._config.preventOverlapRegistration);
     this.hideScheduleBoxInput.checked = Boolean(this._config.hideMyScheduleBox);
     this.hideClosedUnavailableSessionsInput.checked = Boolean(this._config.hideClosedUnavailableSessions);
+    this.registrationRulesInput.value = JSON.stringify(this._config.registrationCategoryRules || [], null, 2);
+    this.rulesValidationMessage.textContent = '';
     this.renderCategoryOptions();
     this.renderExcludedSessionOptions();
+  }
+
+  parseRegistrationRules() {
+    const rawValue = this.registrationRulesInput.value.trim();
+
+    if (!rawValue) {
+      this.rulesValidationMessage.textContent = '';
+      return this._config.registrationCategoryRules || [];
+    }
+
+    try {
+      const parsed = JSON.parse(rawValue);
+      if (!Array.isArray(parsed)) {
+        throw new Error('Rules JSON must be an array.');
+      }
+
+      const normalizedRules = parsed
+        .map(rule => ({
+          registrationTypeId: typeof rule?.registrationTypeId === 'string' ? rule.registrationTypeId.trim() : '',
+          categoryId: typeof rule?.categoryId === 'string' ? rule.categoryId.trim() : '',
+          minSessions: Number(rule?.minSessions)
+        }))
+        .filter(rule => rule.registrationTypeId && rule.categoryId && Number.isFinite(rule.minSessions) && rule.minSessions > 0);
+
+      this.rulesValidationMessage.textContent = '';
+      return normalizedRules;
+    } catch (error) {
+      this.rulesValidationMessage.textContent = 'Invalid JSON. Rules were not updated.';
+      return this._config.registrationCategoryRules || [];
+    }
   }
 
   renderCategoryOptions() {
@@ -305,7 +354,8 @@ class SessionTabsEditor extends HTMLElement {
       hideMyScheduleBox: this.hideScheduleBoxInput.checked,
       hideClosedUnavailableSessions: this.hideClosedUnavailableSessionsInput.checked,
       allowedCategoryIds: this._config.allowedCategoryIds || [],
-      overlapExcludedSessionIds: this._config.overlapExcludedSessionIds || []
+      overlapExcludedSessionIds: this._config.overlapExcludedSessionIds || [],
+      registrationCategoryRules: this.parseRegistrationRules()
     };
     this.renderExcludedSessionOptions();
   }
