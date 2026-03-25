@@ -5,6 +5,17 @@ const ObserveSubject = {
   ADMISSION_ITEM: 'ADMISSION_ITEM'
 };
 
+const REGISTERED_STATUS_CODES = new Set(['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED']);
+const NON_REGISTERED_STATUS_CODES = new Set([
+  'OPEN',
+  'OPEN_FROM_WAITLIST',
+  'WAITLIST_AVAILABLE',
+  'WAITLIST_FULL',
+  'FULL',
+  'CLOSED',
+  'UNAVAILABLE'
+]);
+
 const dateKey = value => {
   const date = new Date(value);
 
@@ -55,6 +66,7 @@ export default class extends HTMLElement {
   currentRegistrationTypeId = '';
   nextNavigationAttemptListener = null;
   bypassNextNavigationGuard = false;
+  registeredSessionCacheKey = '';
 
   constructor({ configuration, theme }) {
     super();
@@ -75,6 +87,7 @@ export default class extends HTMLElement {
     this.initializeLayout();
     this.initNavigatorValidation();
     this.attachNextNavigationGuard();
+    this.registeredSessionCacheKey = this.buildRegisteredSessionCacheKey();
 
     const rerender = async () => {
       if (this.configuration?.hideMyScheduleBox) {
@@ -400,8 +413,63 @@ export default class extends HTMLElement {
         return false;
       }
       const statusCode = this.getStatusCodeForSession(session.id);
-      return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(statusCode);
+      return REGISTERED_STATUS_CODES.has(statusCode);
     }).length;
+  }
+
+  buildRegisteredSessionCacheKey() {
+    const eventId = this.configuration?.eventId || this.configuration?.id || 'default';
+    return `session-browser-registered-session-ids:${eventId}`;
+  }
+
+  getCachedRegisteredSessionIds() {
+    if (!window?.localStorage || !this.registeredSessionCacheKey) {
+      return [];
+    }
+
+    try {
+      const value = window.localStorage.getItem(this.registeredSessionCacheKey);
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+
+      return parsed.filter(sessionId => typeof sessionId === 'string' && sessionId);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  persistCachedRegisteredSessionIds(sessionIds) {
+    if (!window?.localStorage || !this.registeredSessionCacheKey) {
+      return;
+    }
+
+    try {
+      const dedupedIds = [...new Set((sessionIds || []).filter(sessionId => typeof sessionId === 'string' && sessionId))];
+      window.localStorage.setItem(this.registeredSessionCacheKey, JSON.stringify(dedupedIds));
+    } catch (error) {
+      // no-op
+    }
+  }
+
+  syncRegisteredSessionCache(sessionId, statusCode) {
+    if (!sessionId) {
+      return;
+    }
+
+    if (!REGISTERED_STATUS_CODES.has(statusCode) && !NON_REGISTERED_STATUS_CODES.has(statusCode)) {
+      return;
+    }
+
+    const cachedIds = new Set(this.getCachedRegisteredSessionIds());
+    if (REGISTERED_STATUS_CODES.has(statusCode)) {
+      cachedIds.add(sessionId);
+    } else {
+      cachedIds.delete(sessionId);
+    }
+
+    this.persistCachedRegisteredSessionIds([...cachedIds]);
   }
 
   getReadOnlyRegisteredProductIds() {
@@ -473,6 +541,7 @@ export default class extends HTMLElement {
 
   setSessionStatus(sessionId, status) {
     this.sessionStatuses.set(sessionId, status || null);
+    this.syncRegisteredSessionCache(sessionId, this.getStatusCodeForSession(sessionId));
   }
 
   getRuleStatus() {
@@ -619,13 +688,39 @@ export default class extends HTMLElement {
       return { hasRule: false, isValid: true, message: '' };
     }
 
-    this.render();
-    return this.getRuleStatus();
+    const loadingOverlay = this.showRequirementCheckLoadingModal();
+    try {
+      const sessionsInRequiredCategory = this.sortSessionsByStartDateAsc(
+        (this.allSessions || []).filter(session => session.category?.id === activeRule.categoryId)
+      );
+      const sessionsById = new Map(sessionsInRequiredCategory.map(session => [session.id, session]));
+      const cachedSessionIds = this.getCachedRegisteredSessionIds().filter(sessionId => sessionsById.has(sessionId));
+      const cachedSessionSet = new Set(cachedSessionIds);
+
+      const cacheMatchedRuleStatus = await this.loadStatusesForSessionsUntilRuleSatisfied(cachedSessionIds);
+      if (cacheMatchedRuleStatus.isValid) {
+        this.render();
+        return cacheMatchedRuleStatus;
+      }
+
+      const uncachedSessionIds = sessionsInRequiredCategory
+        .map(session => session.id)
+        .filter(sessionId => !cachedSessionSet.has(sessionId));
+      const bruteForceRuleStatus = await this.loadStatusesForSessionsUntilRuleSatisfied(uncachedSessionIds);
+      this.render();
+      return bruteForceRuleStatus;
+    } finally {
+      loadingOverlay?.remove();
+    }
   }
 
   async loadStatusesForSessionsUntilRuleSatisfied(sessionIds) {
     for (const sessionId of sessionIds) {
       if (!sessionId || this.sessionStatuses.has(sessionId)) {
+        const loadedRuleStatus = this.getRuleStatus();
+        if (loadedRuleStatus.isValid) {
+          return loadedRuleStatus;
+        }
         continue;
       }
 
@@ -1081,7 +1176,7 @@ export default class extends HTMLElement {
     return (this.allSessions || [])
       .filter(session => {
         const code = this.getStatusCodeForSession(session.id);
-        return ['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED'].includes(code);
+        return REGISTERED_STATUS_CODES.has(code);
       })
       .map(session => {
         const amount = this.resolveSessionAmount(session);
