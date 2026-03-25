@@ -55,6 +55,7 @@ export default class extends HTMLElement {
   currentRegistrationTypeId = '';
   nextNavigationAttemptListener = null;
   bypassNextNavigationGuard = false;
+  registeredStatusCodes = new Set(['SELECTED', 'WAITLISTED', 'INCLUDED', 'BUNDLED']);
 
   constructor({ configuration, theme }) {
     super();
@@ -400,6 +401,52 @@ export default class extends HTMLElement {
     }).length;
   }
 
+  getStatusCacheStorageKey() {
+    const registrationType = this.currentRegistrationTypeId || 'ALL';
+    const widgetId = this.configuration?.widgetInstanceId || this.configuration?.widgetId || 'default';
+    const scope = `${window.location.pathname}|${registrationType}|${widgetId}`;
+    return `session-browser:registered-session-ids:${scope}`;
+  }
+
+  getCachedRegisteredSessionIds() {
+    try {
+      const raw = window.localStorage.getItem(this.getStatusCacheStorageKey());
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(value => typeof value === 'string' && value) : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  setCachedRegisteredSessionIds(sessionIds) {
+    try {
+      const uniqueIds = [...new Set((sessionIds || []).filter(value => typeof value === 'string' && value))];
+      window.localStorage.setItem(this.getStatusCacheStorageKey(), JSON.stringify(uniqueIds));
+    } catch (error) {
+      // no-op
+    }
+  }
+
+  updateCachedRegisteredSessionId(sessionId, status) {
+    if (!sessionId) {
+      return;
+    }
+
+    const currentIds = new Set(this.getCachedRegisteredSessionIds());
+    const statusCode = typeof status === 'string' ? status : status?.status;
+    if (this.registeredStatusCodes.has(statusCode)) {
+      currentIds.add(sessionId);
+    } else {
+      currentIds.delete(sessionId);
+    }
+    this.setCachedRegisteredSessionIds([...currentIds]);
+  }
+
+  setSessionStatus(sessionId, status) {
+    this.sessionStatuses.set(sessionId, status || null);
+    this.updateCachedRegisteredSessionId(sessionId, status || null);
+  }
+
   getRuleStatus() {
     const activeRule = this.getActiveRegistrationRule();
     if (!activeRule) {
@@ -546,9 +593,17 @@ export default class extends HTMLElement {
 
     const unloadedSessionIds = this.getCategorySessionIdsWithUnloadedStatuses(activeRule.categoryId);
     if (unloadedSessionIds.length) {
+      const cachedRegisteredIds = this.getCachedRegisteredSessionIds();
+      const prioritizedIds = cachedRegisteredIds.filter(sessionId => unloadedSessionIds.includes(sessionId));
+      const remainingIds = unloadedSessionIds.filter(sessionId => !prioritizedIds.includes(sessionId));
+      const statusLoadOrder = [...prioritizedIds, ...remainingIds];
       const loadingOverlay = this.showRequirementCheckLoadingModal();
       try {
-        await this.loadStatusesForSessions(unloadedSessionIds);
+        const statusCheck = await this.loadStatusesForSessionsUntilRuleSatisfied(statusLoadOrder);
+        if (statusCheck?.isValid) {
+          this.render();
+          return statusCheck;
+        }
       } finally {
         loadingOverlay.remove();
       }
@@ -558,7 +613,7 @@ export default class extends HTMLElement {
     return this.getRuleStatus();
   }
 
-  async loadStatusesForSessions(sessionIds) {
+  async loadStatusesForSessionsUntilRuleSatisfied(sessionIds) {
     for (const sessionId of sessionIds) {
       if (!sessionId || this.sessionStatuses.has(sessionId)) {
         continue;
@@ -566,13 +621,19 @@ export default class extends HTMLElement {
 
       try {
         const status = await this.cventSdk.getSessionStatus(sessionId);
-        this.sessionStatuses.set(sessionId, status || null);
+        this.setSessionStatus(sessionId, status || null);
       } catch (error) {
-        this.sessionStatuses.set(sessionId, null);
+        this.setSessionStatus(sessionId, null);
       }
 
       this.updateSessionTileStatus(sessionId);
+      const ruleStatus = this.getRuleStatus();
+      if (ruleStatus.isValid) {
+        return ruleStatus;
+      }
     }
+
+    return this.getRuleStatus();
   }
 
   showRequirementCheckLoadingModal() {
@@ -813,7 +874,7 @@ export default class extends HTMLElement {
 
         await this.cventSdk.pickSession(conflict.id);
         const updatedConflictStatus = await this.cventSdk.getSessionStatus(conflict.id);
-        this.sessionStatuses.set(conflict.id, updatedConflictStatus || null);
+        this.setSessionStatus(conflict.id, updatedConflictStatus || null);
       }
     }
 
@@ -823,7 +884,7 @@ export default class extends HTMLElement {
     }
 
     const updatedStatus = await this.cventSdk.getSessionStatus(sessionId);
-    this.sessionStatuses.set(sessionId, updatedStatus || null);
+    this.setSessionStatus(sessionId, updatedStatus || null);
     this.render();
     return {
       success: true,
@@ -858,9 +919,9 @@ export default class extends HTMLElement {
     if (!this.sessionStatuses.has(sessionId)) {
       try {
         const status = await this.cventSdk.getSessionStatus(sessionId);
-        this.sessionStatuses.set(sessionId, status || null);
+        this.setSessionStatus(sessionId, status || null);
       } catch (error) {
-        this.sessionStatuses.set(sessionId, null);
+        this.setSessionStatus(sessionId, null);
       }
     }
 
@@ -986,7 +1047,7 @@ export default class extends HTMLElement {
                 if (this.cventSdk.pickSession) {
                   await this.cventSdk.pickSession(entry.session.id);
                   const updatedStatus = await this.cventSdk.getSessionStatus(entry.session.id);
-                  this.sessionStatuses.set(entry.session.id, updatedStatus || null);
+                  this.setSessionStatus(entry.session.id, updatedStatus || null);
                   this.render();
                 }
               };
@@ -1526,9 +1587,9 @@ export default class extends HTMLElement {
 
         try {
           const status = await this.cventSdk.getSessionStatus(sessionId);
-          this.sessionStatuses.set(sessionId, status || null);
+          this.setSessionStatus(sessionId, status || null);
         } catch (error) {
-          this.sessionStatuses.set(sessionId, null);
+          this.setSessionStatus(sessionId, null);
         }
 
         if (this.statusLoadVersion !== loadVersion) {
