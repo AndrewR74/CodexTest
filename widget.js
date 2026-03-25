@@ -53,6 +53,7 @@ export default class extends HTMLElement {
   statusObserver = null;
   navigator = null;
   currentRegistrationTypeId = '';
+  nextNavigationAttemptListener = null;
 
   constructor({ configuration, theme }) {
     super();
@@ -72,6 +73,7 @@ export default class extends HTMLElement {
 
     this.initializeLayout();
     this.initNavigatorValidation();
+    this.attachNextNavigationGuard();
 
     const rerender = async () => {
       if (this.configuration?.hideMyScheduleBox) {
@@ -95,6 +97,7 @@ export default class extends HTMLElement {
   disconnectedCallback() {
     this.disconnectStatusObserver();
     this.unsubCallbacks.forEach(unsub => unsub?.());
+    this.detachNextNavigationGuard();
   }
 
   async fetchAndRender() {
@@ -424,7 +427,7 @@ export default class extends HTMLElement {
 
     const ruleStatus = this.getRuleStatus();
     this.ruleMessage.textContent = ruleStatus.message;
-    this.ruleMessage.classList.toggle('visible', Boolean(ruleStatus.hasRule));
+    this.ruleMessage.classList.toggle('visible', Boolean(ruleStatus.hasRule && !ruleStatus.isValid));
     this.ruleMessage.classList.toggle('invalid', Boolean(ruleStatus.hasRule && !ruleStatus.isValid));
   }
 
@@ -435,6 +438,83 @@ export default class extends HTMLElement {
 
     const ruleStatus = this.getRuleStatus();
     this.navigator.setIsValid(ruleStatus.isValid);
+  }
+
+  attachNextNavigationGuard() {
+    if (this.nextNavigationAttemptListener) {
+      return;
+    }
+
+    this.nextNavigationAttemptListener = event => {
+      const actionable = event.target?.closest?.('button, a, [role="button"], input[type="button"], input[type="submit"]');
+      if (!actionable) {
+        return;
+      }
+
+      const label = (actionable.textContent || actionable.value || '').trim().toLowerCase();
+      const ariaLabel = (actionable.getAttribute?.('aria-label') || '').trim().toLowerCase();
+      const isNextAction =
+        /\b(next|continue|review|checkout)\b/.test(label) || /\b(next|continue|review|checkout)\b/.test(ariaLabel);
+
+      if (!isNextAction) {
+        return;
+      }
+
+      const ruleStatus = this.getRuleStatus();
+      if (!ruleStatus.hasRule || ruleStatus.isValid) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      this.showRuleRequirementModal(ruleStatus.message);
+    };
+
+    document.addEventListener('click', this.nextNavigationAttemptListener, true);
+  }
+
+  detachNextNavigationGuard() {
+    if (!this.nextNavigationAttemptListener) {
+      return;
+    }
+
+    document.removeEventListener('click', this.nextNavigationAttemptListener, true);
+    this.nextNavigationAttemptListener = null;
+  }
+
+  showRuleRequirementModal(ruleMessage) {
+    if (this.ruleRequirementModalOverlay) {
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'conflict-modal-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'conflict-modal';
+    modal.innerHTML = `
+      <h3>Selection Requirement</h3>
+      <p>${ruleMessage}</p>
+      <p>Please satisfy this requirement before moving to the next page.</p>
+    `;
+
+    const buttonRow = document.createElement('div');
+    buttonRow.className = 'conflict-modal-actions';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'modal-btn primary';
+    closeBtn.textContent = 'OK';
+    closeBtn.onclick = () => {
+      overlay.remove();
+      this.ruleRequirementModalOverlay = null;
+    };
+
+    buttonRow.appendChild(closeBtn);
+    modal.appendChild(buttonRow);
+    overlay.appendChild(modal);
+    this.shadowRoot.appendChild(overlay);
+    this.ruleRequirementModalOverlay = overlay;
   }
 
   updateCategoryTabs(categories) {
