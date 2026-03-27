@@ -10,10 +10,9 @@ const NON_REGISTERED_STATUS_CODES = new Set([
   'OPEN',
   'OPEN_FROM_WAITLIST',
   'WAITLIST_AVAILABLE',
-  'WAITLIST_FULL',
-  'FULL',
+  'WAITLIST_UNAVAILABLE',
   'CLOSED',
-  'UNAVAILABLE'
+  'NOT_AVAILABLE'
 ]);
 
 const dateKey = value => {
@@ -897,7 +896,7 @@ export default class extends HTMLElement {
   }
 
   updateSessionTileStatus(sessionId) {
-    if (this.configuration?.hideClosedUnavailableSessions) {
+    if (this.configuration?.hideClosedUnavailableSessions || this.configuration?.hideFullWithoutWaitlistSessions) {
       this.renderSessionResults();
       this.updateRuleStatusMessage();
       this.applyNavigationValidity();
@@ -1154,6 +1153,15 @@ export default class extends HTMLElement {
     return status?.status || '';
   }
 
+  getSubStatusCodeForSession(sessionId) {
+    const status = this.sessionStatuses.get(sessionId);
+    if (!status || typeof status === 'string') {
+      return '';
+    }
+
+    return status.subStatus || status.substatus || '';
+  }
+
   getSessionTimeLabel(session) {
     const start = new Date(session.startDateTime);
     const end = new Date(session.endDateTime);
@@ -1207,6 +1215,9 @@ export default class extends HTMLElement {
     if (this.configuration?.hideClosedUnavailableSessions) {
       filtered = filtered.filter(session => !this.isClosedOrUnavailableSession(session.id));
     }
+    if (this.configuration?.hideFullWithoutWaitlistSessions) {
+      filtered = filtered.filter(session => !this.isFullWithoutWaitlistSession(session.id));
+    }
 
     if (this.selectedCategoryId) {
       filtered = filtered.filter(session => session.category?.id === this.selectedCategoryId);
@@ -1248,7 +1259,21 @@ export default class extends HTMLElement {
     }
 
     const statusCode = this.getStatusCodeForSession(sessionId);
-    return ['CLOSED', 'UNAVAILABLE'].includes(statusCode);
+    return ['CLOSED', 'NOT_AVAILABLE'].includes(statusCode);
+  }
+
+  isFullWithoutWaitlistSession(sessionId) {
+    if (!this.sessionStatuses.has(sessionId)) {
+      return false;
+    }
+
+    const statusCode = this.getStatusCodeForSession(sessionId);
+    if (statusCode !== 'WAITLIST_UNAVAILABLE') {
+      return false;
+    }
+
+    const subStatusCode = this.getSubStatusCodeForSession(sessionId);
+    return ['NO_WAITLIST', 'WAITLIST_FULL'].includes(subStatusCode);
   }
 
   getUniqueCategories(sessions) {
