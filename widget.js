@@ -157,7 +157,11 @@ export default class extends HTMLElement {
 
     const configuredSessions = this.getConfiguredSessions(this.allSessions);
     this.sessions = configuredSessions;
-    await this.preloadRegisteredSessionStatuses({ loadVersion, sessions: configuredSessions });
+    if (this.shouldLoadAllStatusesOnInit()) {
+      await this.loadAllSessionStatusesOnInit({ loadVersion, sessions: configuredSessions });
+    } else {
+      await this.preloadRegisteredSessionStatuses({ loadVersion, sessions: configuredSessions });
+    }
     if (this.statusLoadVersion !== loadVersion) {
       return;
     }
@@ -490,6 +494,33 @@ export default class extends HTMLElement {
       loadVersion,
       delayMs: this.statusFetchDelayMs
     });
+  }
+
+  shouldLoadAllStatusesOnInit() {
+    return Boolean(this.configuration?.loadAllStatusesOnInit);
+  }
+
+  async loadAllSessionStatusesOnInit({ loadVersion, sessions } = {}) {
+    const sessionsToHydrate = Array.isArray(sessions) ? sessions : [];
+
+    await Promise.all(
+      sessionsToHydrate.map(async sessionRecord => {
+        try {
+          const statusResponse = await this.cventSdk.getSessionStatus(sessionRecord.id);
+          const { status: statusCode } = statusResponse || {};
+          sessionRecord.status = statusCode;
+          this.setSessionStatus(sessionRecord.id, statusResponse || null);
+        } catch (error) {
+          this.setSessionStatus(sessionRecord.id, null);
+        }
+      })
+    );
+
+    if (this.statusLoadVersion !== loadVersion) {
+      return;
+    }
+
+    this.renderedSessionIds.forEach(sessionId => this.updateSessionTileStatus(sessionId));
   }
 
   setSessionStatus(sessionId, status) {
@@ -876,7 +907,9 @@ export default class extends HTMLElement {
       this.sessionTilesById.set(session.id, tile);
       this.renderedSessionIds.push(session.id);
       leftColumn.appendChild(tile);
-      this.statusObserver?.observe(tile);
+      if (!this.shouldLoadAllStatusesOnInit()) {
+        this.statusObserver?.observe(tile);
+      }
     });
 
     if (!sessions.length && !this.isLoading) {

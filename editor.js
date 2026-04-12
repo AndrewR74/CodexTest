@@ -51,6 +51,9 @@ class SessionTabsEditor extends HTMLElement {
     this.hideFullWithoutWaitlistSessionsInput = document.createElement('input');
     this.hideFullWithoutWaitlistSessionsInput.type = 'checkbox';
 
+    this.loadAllStatusesOnInitInput = document.createElement('input');
+    this.loadAllStatusesOnInitInput.type = 'checkbox';
+
     this.excludedSessionFilterInput = document.createElement('input');
     this.excludedSessionFilterInput.type = 'search';
     this.excludedSessionFilterInput.placeholder = 'Filter sessions by name';
@@ -102,6 +105,12 @@ class SessionTabsEditor extends HTMLElement {
       document.createTextNode(' Hide full sessions when no waitlist is offered')
     );
 
+    const loadAllStatusesOnInitLabel = document.createElement('label');
+    loadAllStatusesOnInitLabel.append(
+      this.loadAllStatusesOnInitInput,
+      document.createTextNode(' Load all session statuses on init (disable lazy status loading)')
+    );
+
     const excludedSessionsLabel = document.createElement('label');
     excludedSessionsLabel.textContent = 'Sessions excluded from overlap check:';
     const registrationRulesLabel = document.createElement('label');
@@ -120,7 +129,8 @@ class SessionTabsEditor extends HTMLElement {
       this.preventOverlapInput,
       this.hideScheduleBoxInput,
       this.hideClosedUnavailableSessionsInput,
-      this.hideFullWithoutWaitlistSessionsInput
+      this.hideFullWithoutWaitlistSessionsInput,
+      this.loadAllStatusesOnInitInput
     ].forEach(input => {
       input.onchange = () => this.captureFormState();
     });
@@ -161,6 +171,9 @@ class SessionTabsEditor extends HTMLElement {
       document.createElement('br'),
       document.createElement('br'),
       hideFullWithoutWaitlistLabel,
+      document.createElement('br'),
+      document.createElement('br'),
+      loadAllStatusesOnInitLabel,
       document.createElement('br'),
       document.createElement('br'),
       excludedSessionsLabel,
@@ -220,6 +233,7 @@ class SessionTabsEditor extends HTMLElement {
     this.hideScheduleBoxInput.checked = Boolean(this._config.hideMyScheduleBox);
     this.hideClosedUnavailableSessionsInput.checked = Boolean(this._config.hideClosedUnavailableSessions);
     this.hideFullWithoutWaitlistSessionsInput.checked = Boolean(this._config.hideFullWithoutWaitlistSessions);
+    this.loadAllStatusesOnInitInput.checked = Boolean(this._config.loadAllStatusesOnInit);
     this.registrationRulesInput.value = JSON.stringify(this._config.registrationCategoryRules || [], null, 2);
     this.rulesValidationMessage.textContent = '';
     this.renderCategoryOptions();
@@ -370,6 +384,7 @@ class SessionTabsEditor extends HTMLElement {
       hideMyScheduleBox: this.hideScheduleBoxInput.checked,
       hideClosedUnavailableSessions: this.hideClosedUnavailableSessionsInput.checked,
       hideFullWithoutWaitlistSessions: this.hideFullWithoutWaitlistSessionsInput.checked,
+      loadAllStatusesOnInit: this.loadAllStatusesOnInitInput.checked,
       allowedCategoryIds: this._config.allowedCategoryIds || [],
       overlapExcludedSessionIds: this._config.overlapExcludedSessionIds || [],
       registrationCategoryRules: this.parseRegistrationRules()
