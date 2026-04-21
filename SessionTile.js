@@ -105,6 +105,11 @@ export class SessionTile extends HTMLElement {
 
     const style = document.createElement('style');
     style.textContent = `
+      :host {
+        display: block;
+        content-visibility: auto;
+        contain-intrinsic-size: 176px;
+      }
       .tile {
         border: 1px solid #e8e8ec;
         border-radius: 16px;
